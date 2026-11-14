@@ -1,0 +1,69 @@
+# The whole pipeline on a laptop: broker, database, migrations, ingestor, six stations.
+# Database on localhost:5433, broker on localhost:1883.
+
+x-app: &app
+  build: .
+  image: caribbean-sensor-pipeline
+  environment:
+    MQTT_HOST: broker
+    MQTT_PORT: "1883"
+    SENSOR_DB_DSN: postgresql://sensors:sensors@db:5432/sensors
+
+services:
+  broker:
+    image: eclipse-mosquitto:2.0.22
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - broker-data:/mosquitto/data
+    restart: unless-stopped
+
+  db:
+    image: timescale/timescaledb:2.22.1-pg17
+    environment:
+      POSTGRES_USER: sensors
+      POSTGRES_PASSWORD: sensors
+      POSTGRES_DB: sensors
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sensors -d sensors"]
+      interval: 2s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ingest:
+    <<: *app
+    command: ["ingest", "--ready-file", "/tmp/ingest-ready"]
+    depends_on:
+      broker:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ingest-ready"]
+      interval: 2s
+      retries: 30
+    restart: unless-stopped
+
+  simulator:
+    <<: *app
+    command: ["simulate", "--backfill-hours", "48", "--interval", "10"]
+    depends_on:
+      ingest:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  broker-data:
+  db-data:

@@ -1,0 +1,78 @@
+# Caribbean Sensor Pipeline
+
+An IoT data pipeline for air-quality sensor stations in **Guadeloupe and Martinique**:
+devices publish over **MQTT**, an ingestion service validates and batches the readings into
+**TimescaleDB**, and the data is ready for **Grafana**. Today the six stations are simulated
+with realistic physics and faults; an ESP32 firmware speaking the same contract comes next.
+
+It is the companion of [antilles-data-pipeline](https://github.com/tomtessondev/antilles-data-pipeline)
+(batch: APIs, S3 lake, dbt, Dagster): same islands, the streaming side, closer to the
+embedded world I come from.
+
+## Architecture
+
+```
+ stations (simulated, ESP32 later)        Mosquitto                 ingestor                     TimescaleDB
+ ─────────────────────────────────►  antilles/<id>/telemetry  ──►  validate (pydantic)  ──►  telemetry (hypertable)
+   BME280 + PMS5003 + battery         antilles/<id>/status         batch: 500 rows / 2 s      telemetry_hourly (continuous aggregate)
+   QoS 1, last will "offline"         (retained)                   rejects ──────────────►    ingest_errors, station_status
+```
+
+| Part | Tooling | Where |
+| --- | --- | --- |
+| Message contract | JSON over MQTT, versioned, validated with pydantic | `src/sensor_pipeline/messages.py` |
+| Stations | Simulator: diurnal cycle, atmospheric tide, Saharan dust plumes, solar battery, faults | `src/sensor_pipeline/simulator.py`, `publisher.py` |
+| Broker | Eclipse Mosquitto 2 | `docker/mosquitto.conf` |
+| Ingestion | paho-mqtt, batching, idempotent inserts, dead-letter table | `src/sensor_pipeline/ingest.py`, `db.py` |
+| Storage | TimescaleDB: hypertable, compression, retention, continuous aggregate | `src/sensor_pipeline/sql/` |
+| Quality | pytest (unit + integration on real containers), ruff, mypy `--strict` | `tests/`, `.github/workflows/ci.yml` |
+
+## Quick start
+
+```bash
+docker compose up -d --build        # broker, database, migrations, ingestor, simulator
+docker compose logs -f ingest       # "Wrote 500 new readings ..."
+```
+
+```bash
+docker compose exec db psql -U sensors -c \
+  "select station_id, bucket, round(pm10_avg_ugm3::numeric, 1) pm10, readings
+   from telemetry_hourly order by bucket desc, station_id limit 12"
+```
+
+Development:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+make install        # pip install -e ".[dev]"
+make check          # ruff, mypy, unit tests
+make integration    # tests against real Mosquitto and TimescaleDB (needs Docker)
+```
+
+## Design choices
+
+- **A versioned contract.** Firmware in the field cannot be updated in lockstep with the
+  server, so every telemetry message carries `v`. Ranges in the schema are the sensors'
+  physical limits: outside them the message is broken; an odd but possible value is data.
+- **At-least-once, stored exactly once.** Stations publish with QoS 1, so the broker may
+  deliver a reading twice; the `(station_id, ts)` key turns duplicates into no-ops. The
+  ingestor keeps a persistent session, so the broker queues messages while it restarts.
+- **Sequence numbers measure loss.** `seq` advances even when a reading is lost on the way:
+  gaps per station are the radio link's loss rate, not a guess.
+- **Nothing is silently dropped.** Messages that fail validation land verbatim in
+  `ingest_errors` with the reason.
+- **Batching with a deadline.** One transaction per 500 readings or per 2 seconds,
+  whichever comes first: throughput without unbounded latency.
+- **Station liveness from MQTT itself.** Each station's last will is a retained "offline"
+  on its status topic: the broker announces a dead station without any polling.
+- **TimescaleDB, not a separate time-series engine.** It is PostgreSQL: SQL, joins with
+  reference tables, the usual tooling, plus daily chunks, columnar compression after 7 days,
+  180-day retention and an hourly rollup refreshed in the background.
+
+## Roadmap
+
+See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Author
+
+Tom Tesson, data engineer and FPGA/embedded engineer, based in Guadeloupe (UTC−4).
