@@ -6,9 +6,10 @@
 2. **Grafana as code** (done). Provisioned datasource and dashboards (map of stations, PM10 with
    the EU limit, link quality, battery, message loss from sequence gaps), alert rules
    (dust episode, station offline, stuck sensor).
-3. **ESP32 firmware.** PlatformIO, BME280 + PMS5003, Wi-Fi reconnection, last will, an
-   offline buffer replayed on reconnection, the same JSON contract; simulated in CI with
-   Wokwi.
+3. **ESP32 firmware** (done). PlatformIO, BME280 + PMS5003, Wi-Fi reconnection, last will,
+   an offline buffer replayed on reconnection, the same JSON contract. CI runs the logic
+   tests on the host and builds the firmware; simulating the whole board with Wokwi is
+   left for later (it needs an account token).
 4. **Data quality.** Detect stuck sensors and spikes in SQL, flag readings instead of
    deleting them, publish a per-station quality score.
 5. **Security.** TLS on the broker, one username/password (or client certificate) per

@@ -19,6 +19,11 @@ than feature count. Every change should be something a recruiter can read.
   - `ingest.py`: paho thread enqueues, main thread validates and batches; `db.py` writes
   - `sql/NNN_*.sql`: migrations applied in order by `sensor-pipeline migrate`
 - TimescaleDB (hypertable `telemetry`, continuous aggregate `telemetry_hourly`), Mosquitto
+- `firmware/`: PlatformIO project for the ESP32 station. Logic in `lib/telemetry` (no
+  Arduino dependency) tested with `pio test -e native`; `src/main.cpp` is hardware glue.
+  `test/golden/telemetry_v1.json` must stay byte-identical to what the serialiser emits and
+  valid for `Telemetry` (`tests/test_firmware_contract.py`). `pio` may be blocked locally
+  by lean-ctx: CI runs it.
 - pytest (unit; integration marked `integration`, real containers via testcontainers),
   ruff, mypy --strict
 - Docker Compose: broker, db (host port 5433), migrate, ingest, simulator, Grafana (host
