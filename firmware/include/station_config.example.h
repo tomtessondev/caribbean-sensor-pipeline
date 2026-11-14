@@ -1,4 +1,4 @@
-// Copy to config.h (git-ignored) and fill in. Without config.h the firmware builds with
+// Copy to station_config.h (git-ignored) and fill in. Without it the firmware builds with
 // these placeholders, which is what CI does.
 #pragma once
 

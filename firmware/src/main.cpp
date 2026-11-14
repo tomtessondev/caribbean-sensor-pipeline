@@ -20,10 +20,10 @@
 #include "ring_buffer.h"
 #include "telemetry.h"
 
-#if __has_include("config.h")
-#include "config.h"
+#if __has_include("station_config.h")
+#include "station_config.h"
 #else
-#include "config.example.h"
+#include "station_config.example.h"
 #endif
 
 namespace {
