@@ -60,12 +60,24 @@ def test_dust_plume_raises_pm10_and_reaches_the_east_first() -> None:
 
 
 def test_lost_messages_leave_gaps_in_the_sequence() -> None:
-    sim = StationSimulator(STATIONS[0], [], seed=3, faults=FaultRates(drop=0.3))
-    received = readings(run(sim, hours=10))
+    sim = StationSimulator(STATIONS[0], [], seed=3, faults=FaultRates(drop=0.3), interval_s=300)
+    received = readings(run(sim, hours=10))  # 120 slots of 5 minutes
     seqs = [r.seq for r in received]
+    gaps = sum(b - a - 1 for a, b in zip(seqs, seqs[1:], strict=False))
 
     assert seqs == sorted(seqs)
-    assert len(received) < 120 and seqs[-1] >= 115  # ~30 % lost, seq still counts them
+    assert 20 < gaps < 50  # ~30 % lost, the sequence still counts them
+    assert gaps + len(received) == seqs[-1] - seqs[0] + 1
+
+
+def test_readings_are_numbered_by_their_time_slot() -> None:
+    sim = StationSimulator(STATIONS[0], [], seed=1, faults=NO_FAULTS, interval_s=10)
+    restarted = StationSimulator(STATIONS[0], [], seed=1, faults=NO_FAULTS, interval_s=10)
+    ts = START + timedelta(minutes=30)
+
+    first, again = sim.reading(ts), restarted.reading(ts)
+    assert first is not None and again is not None
+    assert first.seq == again.seq == int(ts.timestamp() // 10)
 
 
 def test_stuck_sensor_repeats_its_last_value() -> None:

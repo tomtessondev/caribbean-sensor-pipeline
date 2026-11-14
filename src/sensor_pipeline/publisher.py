@@ -12,7 +12,7 @@ from paho.mqtt.enums import CallbackAPIVersion
 
 from sensor_pipeline.config import Settings
 from sensor_pipeline.messages import status_topic, telemetry_topic
-from sensor_pipeline.simulator import FaultRates, StationSimulator, dust_episodes
+from sensor_pipeline.simulator import DUST_EPOCH, FaultRates, StationSimulator, dust_episodes
 from sensor_pipeline.stations import Station
 
 logger = logging.getLogger(__name__)
@@ -49,17 +49,21 @@ def simulate(
     interval_s: float,
     backfill_hours: float,
     stop: threading.Event,
-    backfill_step_s: float = 60,
     faults: FaultRates | None = None,
 ) -> int:
-    """Publish `backfill_hours` of history at once (one reading per `backfill_step_s`), then
-    one reading per station every `interval_s` seconds until `stop` is set. Returns the
-    number of messages published."""
-    now = datetime.now(UTC).replace(microsecond=0)
-    start = now - timedelta(hours=backfill_hours)
-    episodes = dust_episodes(seed, start - timedelta(days=4), days=int(backfill_hours / 24) + 60)
+    """Publish `backfill_hours` of history at once, then one reading per station every
+    `interval_s` seconds until `stop` is set. Readings sit on a fixed grid of `interval_s`,
+    so a restart republishes identical history. Returns the number of messages published."""
+    step = timedelta(seconds=interval_s)
+
+    def slot(t: datetime) -> datetime:
+        return datetime.fromtimestamp(t.timestamp() // interval_s * interval_s, UTC)
+
+    now = slot(datetime.now(UTC))
+    episodes = dust_episodes(seed, DUST_EPOCH, days=(now - DUST_EPOCH).days + 60)
     sims = [
-        StationSimulator(station, episodes, seed, faults or FaultRates()) for station in stations
+        StationSimulator(station, episodes, seed, faults or FaultRates(), interval_s)
+        for station in stations
     ]
     clients = {s.station_id: StationClient(s.station_id, settings) for s in stations}
     published = 0
@@ -84,16 +88,21 @@ def simulate(
         pending.clear()
 
     try:
-        ts = start
-        while ts < now:
+        ts = slot(now - timedelta(hours=backfill_hours))
+        while ts <= now:
             emit(ts)
-            ts += timedelta(seconds=backfill_step_s)
+            ts += step
         wait_for_acks()
-        logger.info("Backfilled %d messages since %s", published, start.isoformat())
-        while not stop.is_set():
-            emit(datetime.now(UTC).replace(microsecond=0))
+        logger.info(
+            "Backfilled %d messages since %s",
+            published,
+            (now - timedelta(hours=backfill_hours)).isoformat(),
+        )
+        # Live: publish each slot when its time comes.
+        while not stop.wait(max(0.0, (ts - datetime.now(UTC)).total_seconds())):
+            emit(ts)
             wait_for_acks()
-            stop.wait(interval_s)
+            ts += step
     finally:
         for client in clients.values():
             client.close()

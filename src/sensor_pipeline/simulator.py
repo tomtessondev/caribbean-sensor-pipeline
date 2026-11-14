@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sensor_pipeline.messages import Telemetry
 from sensor_pipeline.stations import Station
@@ -38,6 +38,10 @@ class DustEpisode:
         if not 0 <= elapsed <= self.hours:
             return 0.0
         return self.peak_pm10_ugm3 * math.sin(math.pi * elapsed / self.hours) ** 2
+
+
+# Plumes are drawn from this date on, so every run of a given seed sees the same ones.
+DUST_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def dust_episodes(seed: int, start: datetime, days: int) -> list[DustEpisode]:
@@ -73,7 +77,10 @@ class StationSimulator:
     episodes: list[DustEpisode]
     seed: int
     faults: FaultRates = field(default_factory=FaultRates)
-    seq: int = 0
+    # Readings fall on a fixed time grid and are numbered by their slot on it. A restarted
+    # simulator therefore republishes the very same (station, ts, seq) triples, which the
+    # database ignores, instead of a second sequence interleaved with the first.
+    interval_s: float = 10.0
     _rng: random.Random = field(init=False)
     _temperature_noise: float = field(init=False, default=0.0)
     _pressure_drift: float = field(init=False, default=0.0)
@@ -90,8 +97,7 @@ class StationSimulator:
     def reading(self, ts: datetime) -> Telemetry | None:
         """The reading at `ts`, or None when the message is lost on the way."""
         rng = self._rng
-        seq = self.seq
-        self.seq += 1
+        seq = int(ts.timestamp() // self.interval_s)
         # Local solar time: the islands are about four hours behind UTC.
         hour = (ts.hour + ts.minute / 60 + self.station.longitude / 15) % 24
 

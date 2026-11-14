@@ -1,0 +1,111 @@
+apiVersion: 1
+
+# Each query returns one row per station (the label) with one number (the value): Grafana
+# evaluates the threshold per station, so one alert fires per affected station.
+groups:
+  - orgId: 1
+    name: sensors
+    folder: Sensors
+    interval: 1m
+    rules:
+      - uid: dust-episode
+        title: Saharan dust episode
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: timescale
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: >-
+                select s.town as station, avg(t.pm10_ugm3) as pm10
+                from telemetry t join stations s using (station_id)
+                where t.ts > now() - interval '1 hour'
+                group by s.town
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [50] }
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "PM10 above the EU limit at {{ $labels.station }}"
+          description: >-
+            PM10 has averaged {{ printf "%.0f" $values.A.Value }} µg/m³ over the last hour
+            (EU daily limit 50). Several stations at once means a Saharan dust plume.
+
+      - uid: station-offline
+        title: Station offline
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: timescale
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: >-
+                select town as station, coalesce(minutes_since_last_reading, 99999) as minutes
+                from station_health
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [5] }
+        for: 0s
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          summary: "No reading from {{ $labels.station }} for {{ printf \"%.0f\" $values.A.Value }} min"
+          description: >-
+            Check the station's status topic: "offline" means the broker saw the connection
+            drop (power, Wi-Fi); "online" with no data means the sensor loop is stuck.
+
+      - uid: pm-sensor-stuck
+        title: Particle sensor stuck
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: timescale
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: >-
+                select town as station, case when pm10_stuck then 1 else 0 end as stuck
+                from station_health
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "PM sensor at {{ $labels.station }} repeats the same value"
+          description: >-
+            A particle counter never reports the exact same value for 30 minutes: the fan or
+            the serial link of the PMS5003 is likely stuck. Readings stay stored; treat them
+            as suspect until the sensor recovers.
