@@ -4,16 +4,10 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable, Iterator
-from typing import Any
 
 import paho.mqtt.client as mqtt
-import psycopg
 import pytest
 from paho.mqtt.enums import CallbackAPIVersion
-from testcontainers.core.container import DockerContainer
-from testcontainers.core.waiting_utils import wait_for_logs
-from testcontainers.postgres import PostgresContainer
 
 from sensor_pipeline.config import Settings
 from sensor_pipeline.db import Store, migrate
@@ -22,45 +16,9 @@ from sensor_pipeline.messages import Telemetry, telemetry_topic
 from sensor_pipeline.publisher import simulate
 from sensor_pipeline.simulator import FaultRates
 from sensor_pipeline.stations import STATIONS
+from tests.support import query, wait_until
 
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture(scope="module")
-def dsn() -> Iterator[str]:
-    with PostgresContainer(
-        "timescale/timescaledb:2.22.1-pg17",
-        username="sensors",
-        password="sensors",
-        dbname="sensors",
-    ) as db:
-        yield db.get_connection_url(driver=None)
-
-
-@pytest.fixture(scope="module")
-def broker() -> Iterator[tuple[str, int]]:
-    container = (
-        DockerContainer("eclipse-mosquitto:2.0.22")
-        .with_command("mosquitto -c /mosquitto-no-auth.conf")
-        .with_exposed_ports(1883)
-    )
-    with container:
-        wait_for_logs(container, "running")
-        yield container.get_container_host_ip(), int(container.get_exposed_port(1883))
-
-
-def query(dsn: str, sql: str) -> list[tuple[Any, ...]]:
-    with psycopg.connect(dsn) as conn:
-        return conn.execute(sql.encode()).fetchall()
-
-
-def wait_until(condition: Callable[[], bool], timeout: float = 30) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if condition():
-            return
-        time.sleep(0.25)
-    raise AssertionError("condition not met in time")
 
 
 def publish_raw(host: str, port: int, topic: str, payload: str) -> None:
@@ -73,7 +31,7 @@ def publish_raw(host: str, port: int, topic: str, payload: str) -> None:
 
 
 def test_migrations_are_idempotent(dsn: str) -> None:
-    assert migrate(dsn) == ["001_schema.sql"]
+    assert migrate(dsn) == ["001_schema.sql", "002_station_health.sql"]
     assert migrate(dsn) == []
     assert query(dsn, "select count(*) from stations") == [(6,)]
 
@@ -97,13 +55,12 @@ def test_simulated_stations_land_in_timescaledb(dsn: str, broker: tuple[str, int
             settings,
             STATIONS,
             seed=1,
-            interval_s=10,
+            interval_s=60,
             backfill_hours=1,
-            backfill_step_s=60,
             stop=already_stopped,
             faults=FaultRates(drop=0, stuck_start=0, spike=0),
         )
-        assert published == 6 * 60
+        assert published == 6 * 61  # one reading per minute, both ends included
         wait_until(lambda: query(dsn, "select count(*) from telemetry") == [(published,)])
 
         # QoS 1 may deliver twice: a redelivered reading must not create a second row.
@@ -113,6 +70,23 @@ def test_simulated_stations_land_in_timescaledb(dsn: str, broker: tuple[str, int
         publish_raw(host, port, telemetry_topic(first[0]), '{"temperature_c": "hot"}')
         wait_until(lambda: query(dsn, "select count(*) from ingest_errors") == [(1,)])
         assert query(dsn, "select count(*) from telemetry") == [(published,)]
+
+        # A restarted simulator republishes its history: same slots, same sequence numbers,
+        # so nothing is duplicated and no loss appears (at most the newest minute is new).
+        again = simulate(
+            settings,
+            STATIONS,
+            seed=1,
+            interval_s=60,
+            backfill_hours=1,
+            stop=already_stopped,
+            faults=FaultRates(drop=0, stuck_start=0, spike=0),
+        )
+        wait_until(lambda: query(dsn, "select count(*) from telemetry")[0][0] >= published)
+        time.sleep(2)  # let the ingestor write the republished batch
+        stored = query(dsn, "select count(*) from telemetry")[0][0]
+        assert stored in (published, published + 6), (stored, again)
+        assert query(dsn, "select max(loss_pct_24h) from station_health")[0][0] == 0
     finally:
         stop_ingest.set()
         ingestor.join(timeout=10)

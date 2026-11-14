@@ -21,6 +21,8 @@ dev = [
     "mypy>=1.10",
     # Integration tests run a real Mosquitto and TimescaleDB in Docker.
     "testcontainers>=4.8",
+    # Tests read the Grafana provisioning files.
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

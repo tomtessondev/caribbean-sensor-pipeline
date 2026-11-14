@@ -1,9 +1,9 @@
 # Roadmap
 
-1. **Core pipeline.** Message contract, simulated stations, Mosquitto, ingestion into
+1. **Core pipeline** (done). Message contract, simulated stations, Mosquitto, ingestion into
    TimescaleDB (hypertable, compression, retention, hourly continuous aggregate), Docker
    Compose, unit and integration tests, CI.
-2. **Grafana as code.** Provisioned datasource and dashboards (map of stations, PM10 with
+2. **Grafana as code** (done). Provisioned datasource and dashboards (map of stations, PM10 with
    the EU limit, link quality, battery, message loss from sequence gaps), alert rules
    (dust episode, station offline, stuck sensor).
 3. **ESP32 firmware.** PlatformIO, BME280 + PMS5003, Wi-Fi reconnection, last will, an

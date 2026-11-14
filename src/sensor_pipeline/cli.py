@@ -35,18 +35,21 @@ def _stop_on_signals() -> threading.Event:
 
 
 @app.command("migrate")
-def migrate_command() -> None:
+def migrate_command(
+    grafana_password: str | None = typer.Option(
+        None, envvar="GRAFANA_DB_PASSWORD", help="Enables the read-only grafana_reader login"
+    ),
+) -> None:
     """Create or upgrade the TimescaleDB schema and register the stations."""
-    applied = migrate(Settings().db_dsn)
+    applied = migrate(Settings().db_dsn, grafana_password)
     typer.echo(f"Applied {len(applied)} migration(s): {', '.join(applied) or 'none'}")
 
 
 @app.command()
 def simulate(
     seed: int = typer.Option(42, help="Same seed, same weather"),
-    interval: float = typer.Option(10.0, min=0.1, help="Seconds between live readings"),
+    interval: float = typer.Option(10.0, min=1, help="Seconds between readings"),
     backfill_hours: float = typer.Option(48.0, min=0, help="History published at start"),
-    backfill_step: float = typer.Option(60.0, min=1, help="Seconds between history readings"),
 ) -> None:
     """Run the six simulated stations until stopped."""
     published = run_simulation(
@@ -55,7 +58,6 @@ def simulate(
         seed=seed,
         interval_s=interval,
         backfill_hours=backfill_hours,
-        backfill_step_s=backfill_step,
         stop=_stop_on_signals(),
     )
     typer.echo(f"Published {published} readings")

@@ -21,7 +21,11 @@ than feature count. Every change should be something a recruiter can read.
 - TimescaleDB (hypertable `telemetry`, continuous aggregate `telemetry_hourly`), Mosquitto
 - pytest (unit; integration marked `integration`, real containers via testcontainers),
   ruff, mypy --strict
-- Docker Compose: broker, db (host port 5433), migrate, ingest, simulator
+- Docker Compose: broker, db (host port 5433), migrate, ingest, simulator, Grafana (host
+  port 3001, anonymous read-only)
+- `grafana/`: provisioned datasource (read-only role `grafana_reader`, password from
+  `GRAFANA_DB_PASSWORD`), dashboards JSON, alert rules YAML. Every SQL query in them is
+  executed by `tests/test_grafana.py`: keep them runnable after schema changes.
 
 ## Commands
 

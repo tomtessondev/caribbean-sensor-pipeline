@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: sensors
+    folder: Sensors
+    type: file
+    # The JSON files in the repository are the source of truth: edits made in the UI are
+    # not kept. Change a dashboard by editing (or exporting over) its file.
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

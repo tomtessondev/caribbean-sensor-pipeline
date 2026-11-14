@@ -9,6 +9,7 @@ from datetime import datetime
 from importlib.resources import files
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import TupleRow
 
 from sensor_pipeline.messages import StationStatus, Telemetry
@@ -30,8 +31,10 @@ TELEMETRY_COLUMNS = (
 )
 
 
-def migrate(dsn: str) -> list[str]:
-    """Apply the SQL files not applied yet, in name order. Returns the files applied."""
+def migrate(dsn: str, grafana_password: str | None = None) -> list[str]:
+    """Apply the SQL files not applied yet, in name order, register the stations and, with
+    `grafana_password`, let the read-only `grafana_reader` role log in. Returns the files
+    applied."""
     # Autocommit: TimescaleDB policies and continuous aggregates refuse explicit
     # transaction blocks.
     with psycopg.connect(dsn, autocommit=True) as conn:
@@ -68,6 +71,13 @@ def migrate(dsn: str) -> list[str]:
                 [s.longitude for s in STATIONS],
             ),
         )
+        if grafana_password is not None:
+            # ALTER ROLE takes no bind parameters: quote the password as a SQL literal.
+            conn.execute(
+                sql.SQL("alter role grafana_reader with login password {}").format(
+                    sql.Literal(grafana_password)
+                )
+            )
     return applied
 
 

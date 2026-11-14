@@ -1,0 +1,182 @@
+{
+  "uid": "fleet-health",
+  "title": "Fleet health",
+  "description": "Is every station alive, powered, connected and telling the truth?",
+  "tags": ["sensors", "operations"],
+  "timezone": "America/Guadeloupe",
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "time": { "from": "now-48h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "station",
+        "label": "Station",
+        "type": "query",
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+        "query": "select town as __text, station_id as __value from stations order by territory, town",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Stations",
+      "description": "Loss is computed from sequence gaps over 24 h. A particle sensor reporting the same value for 30 minutes is flagged as stuck.",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "select town as \"Station\", territory as \"Territory\", status as \"Status\", minutes_since_last_reading as \"Last reading (min ago)\", battery_v as \"Battery\", rssi_dbm as \"RSSI\", loss_pct_24h as \"Loss 24 h\", case when pm10_stuck then 'stuck' else 'ok' end as \"PM sensor\"\nfrom station_health where station_id in ($station) order by territory, town"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "cellOptions": { "type": "auto" } } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "mappings", "value": [ { "type": "value", "options": { "online": { "color": "green", "index": 0 }, "offline": { "color": "red", "index": 1 }, "unknown": { "color": "orange", "index": 2 } } } ] }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "PM sensor" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "mappings", "value": [ { "type": "value", "options": { "ok": { "color": "green", "index": 0 }, "stuck": { "color": "red", "index": 1 } } } ] }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Last reading (min ago)" },
+            "properties": [
+              { "id": "decimals", "value": 1 },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 2 }, { "color": "red", "value": 5 } ] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Battery" },
+            "properties": [
+              { "id": "unit", "value": "volt" },
+              { "id": "decimals", "value": 2 },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 3.5 }, { "color": "green", "value": 3.7 } ] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "RSSI" },
+            "properties": [
+              { "id": "unit", "value": "dBm" },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": -85 }, { "color": "green", "value": -75 } ] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Loss 24 h" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "decimals", "value": 1 },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 2 }, { "color": "red", "value": 5 } ] } }
+            ]
+          }
+        ]
+      },
+      "options": { "showHeader": true, "cellHeight": "sm" }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Battery voltage",
+      "description": "Solar charging by day, discharge at night. A station whose nightly low keeps dropping has a failing panel or cell.",
+      "gridPos": { "x": 0, "y": 9, "w": 12, "h": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, min(t.battery_v) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "volt", "decimals": 2, "custom": { "lineWidth": 2, "showPoints": "never" }, "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Radio signal (RSSI)",
+      "gridPos": { "x": 12, "y": 9, "w": 12, "h": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.rssi_dbm) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "dBm", "decimals": 0, "custom": { "lineWidth": 2, "showPoints": "never" }, "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Message loss per hour",
+      "description": "Readings missing from each station's sequence, as a share of the readings it sent.",
+      "gridPos": { "x": 0, "y": 18, "w": 12, "h": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "with ordered as (\n  select station_id, ts, greatest(coalesce(seq - lag(seq) over (partition by station_id order by ts) - 1, 0), 0) as lost\n  from telemetry where $__timeFilter(ts) and station_id in ($station)\n)\nselect time_bucket('1 hour', o.ts) as time, s.town as metric, 100.0 * sum(o.lost) / (sum(o.lost) + count(*)) as value\nfrom ordered o join stations s using (station_id)\ngroup by 1, 2 order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "decimals": 2, "min": 0, "custom": { "lineWidth": 1, "drawStyle": "bars", "fillOpacity": 60, "showPoints": "never" }, "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Latest rejected messages",
+      "description": "Messages that failed validation, kept verbatim with the reason.",
+      "gridPos": { "x": 12, "y": 18, "w": 12, "h": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "select received_at as \"Received\", topic as \"Topic\", left(error, 120) as \"Error\", left(payload, 120) as \"Payload\"\nfrom ingest_errors order by received_at desc limit 20"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "align": "auto", "cellOptions": { "type": "auto" } } }, "overrides": [] },
+      "options": { "showHeader": true, "cellHeight": "sm" }
+    }
+  ]
+}

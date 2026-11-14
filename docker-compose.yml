@@ -1,5 +1,6 @@
-# The whole pipeline on a laptop: broker, database, migrations, ingestor, six stations.
-# Database on localhost:5433, broker on localhost:1883.
+# The whole pipeline on a laptop: broker, database, migrations, ingestor, six stations and
+# Grafana. Grafana on http://localhost:3001 (admin / admin), database on localhost:5433,
+# broker on localhost:1883.
 
 x-app: &app
   build: .
@@ -8,6 +9,7 @@ x-app: &app
     MQTT_HOST: broker
     MQTT_PORT: "1883"
     SENSOR_DB_DSN: postgresql://sensors:sensors@db:5432/sensors
+    GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local}
 
 services:
   broker:
@@ -64,6 +66,29 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  grafana:
+    image: grafana/grafana:12.3.0
+    environment:
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      # Local demo: dashboards readable without logging in; editing still needs admin.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/air-quality.json
+    ports:
+      # 3000 is often taken by a JavaScript dev server.
+      - "3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   broker-data:
   db-data:
+  grafana-data:
