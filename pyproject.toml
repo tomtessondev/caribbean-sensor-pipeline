@@ -24,6 +24,10 @@ dev = [
     # Tests read the Grafana provisioning files.
     "pyyaml>=6.0",
 ]
+# Builds and tests the ESP32 firmware in firmware/.
+firmware = [
+    "platformio>=6.1",
+]
 
 [project.scripts]
 sensor-pipeline = "sensor_pipeline.cli:app"
