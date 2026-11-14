@@ -31,10 +31,12 @@ TELEMETRY_COLUMNS = (
 )
 
 
-def migrate(dsn: str, grafana_password: str | None = None) -> list[str]:
-    """Apply the SQL files not applied yet, in name order, register the stations and, with
-    `grafana_password`, let the read-only `grafana_reader` role log in. Returns the files
-    applied."""
+def migrate(
+    dsn: str, grafana_password: str | None = None, ingestor_password: str | None = None
+) -> list[str]:
+    """Apply the SQL files not applied yet, in name order, register the stations and let
+    the least-privileged roles log in when given a password: `grafana_reader` (read-only)
+    and `sensor_ingestor` (insert-only). Returns the files applied."""
     # Autocommit: TimescaleDB policies and continuous aggregates refuse explicit
     # transaction blocks.
     with psycopg.connect(dsn, autocommit=True) as conn:
@@ -71,13 +73,17 @@ def migrate(dsn: str, grafana_password: str | None = None) -> list[str]:
                 [s.longitude for s in STATIONS],
             ),
         )
-        if grafana_password is not None:
-            # ALTER ROLE takes no bind parameters: quote the password as a SQL literal.
-            conn.execute(
-                sql.SQL("alter role grafana_reader with login password {}").format(
-                    sql.Literal(grafana_password)
+        for role, password in (
+            ("grafana_reader", grafana_password),
+            ("sensor_ingestor", ingestor_password),
+        ):
+            if password is not None:
+                # ALTER ROLE takes no bind parameters: quote the password as a SQL literal.
+                conn.execute(
+                    sql.SQL("alter role {} with login password {}").format(
+                        sql.Identifier(role), sql.Literal(password)
+                    )
                 )
-            )
     return applied
 
 
@@ -108,9 +114,11 @@ class Store:
             return 0
         placeholders = ", ".join(["%s"] * len(TELEMETRY_COLUMNS))
         with self._conn.transaction(), self._conn.cursor() as cur:
+            # No conflict target: the primary key (station_id, ts) is the only unique
+            # constraint, and naming it would need SELECT, which the ingestor role lacks.
             cur.executemany(
                 f"insert into telemetry ({', '.join(TELEMETRY_COLUMNS)}) values ({placeholders})"
-                " on conflict (station_id, ts) do nothing",
+                " on conflict do nothing",
                 [tuple(getattr(r, c) for c in TELEMETRY_COLUMNS) for r in readings],
             )
             return cur.rowcount

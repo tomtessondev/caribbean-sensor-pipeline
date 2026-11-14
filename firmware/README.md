@@ -24,6 +24,14 @@ pio test -e native                     # logic tests on the computer, no board n
 pio run -e esp32dev -t upload -t monitor
 ```
 
+The broker only accepts TLS with a login. Generate the security material with the broker's
+address on your network, then copy into `station_config.h` the station's password (from
+`credentials.json`) and the CA certificate (`ca.crt`):
+
+```bash
+sensor-pipeline provision-broker --out secrets/ --hostname 192.168.1.10
+```
+
 `station_config.h` is git-ignored; without it the firmware builds with the placeholders,
 which is what CI does.
 
@@ -72,5 +80,6 @@ CI runs the host tests and builds the firmware for the ESP32 on every pull reque
 ## Not done yet
 
 - Simulating the whole board in CI with [Wokwi](https://wokwi.com) (needs an account token).
-- TLS and per-station credentials (roadmap step 5).
+- Client certificates instead of passwords, and secure storage of the password in the
+  ESP32 flash (NVS encryption) instead of a compile-time constant.
 - Deep sleep between readings to save the battery: the ESP32 currently stays awake.

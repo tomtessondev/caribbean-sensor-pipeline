@@ -29,8 +29,9 @@ embedded world I come from.
 | Message contract | JSON over MQTT, versioned, validated with pydantic | `src/sensor_pipeline/messages.py` |
 | Stations | Simulator: diurnal cycle, atmospheric tide, Saharan dust plumes, solar battery, faults | `src/sensor_pipeline/simulator.py`, `publisher.py` |
 | Firmware | ESP32, C++17, PlatformIO: PMS5003 frame decoder, store-and-forward ring buffer, esp-mqtt QoS 1; Unity tests on the host; golden message shared with the Python tests | `firmware/` |
-| Broker | Eclipse Mosquitto 2 | `docker/mosquitto.conf` |
-| Ingestion | paho-mqtt, batching, idempotent inserts, dead-letter table | `src/sensor_pipeline/ingest.py`, `db.py` |
+| Broker | Eclipse Mosquitto 2: TLS only, a login per client, per-station ACL | `docker/mosquitto.conf`, `docker/broker-entrypoint.sh` |
+| Security material | Local CA and broker certificate (cryptography, ECDSA P-256), random passwords, ACL; generated, never committed | `src/sensor_pipeline/provision.py` |
+| Ingestion | paho-mqtt, batching, idempotent inserts, dead-letter table; insert-only database role | `src/sensor_pipeline/ingest.py`, `db.py` |
 | Storage | TimescaleDB: hypertable, compression, retention, continuous aggregate | `src/sensor_pipeline/sql/` |
 | Data quality | SQL rules run by a TimescaleDB job: stuck sensor, spike, implausible weather; flags, a validated view, a daily quality score per station | `src/sensor_pipeline/sql/003_data_quality.sql` |
 | Monitoring | Grafana 12: provisioned datasource, two dashboards, three alert rules; read-only database role | `grafana/`, `src/sensor_pipeline/sql/002_station_health.sql` |
@@ -39,9 +40,14 @@ embedded world I come from.
 ## Quick start
 
 ```bash
-docker compose up -d --build        # broker, database, migrations, ingestor, simulator, Grafana
+docker compose up -d --build        # certificates, broker, database, migrations, ingestor, simulator, Grafana
 docker compose logs -f ingest       # "Wrote 500 new readings ..."
 ```
+
+The broker listens on `localhost:8883`, TLS only, with a login. On the first start the
+`provision` service writes the CA, the broker certificate, one password per station and the
+ACL to the `broker-secrets` volume; later starts keep them. To reach the broker from your
+machine, copy `ca.crt` and `credentials.json` out of that volume.
 
 Grafana on http://localhost:3001 (read-only without login; `admin` / `admin` to edit):
 
@@ -88,6 +94,21 @@ make integration    # tests against real Mosquitto and TimescaleDB (needs Docker
   whichever comes first: throughput without unbounded latency.
 - **Station liveness from MQTT itself.** Each station's last will is a retained "offline"
   on its status topic: the broker announces a dead station without any polling.
+- **A station can only speak for itself.** Every client logs in (no anonymous access), over
+  TLS verified against the project's own CA. A station's username is its id and the ACL
+  pattern `antilles/%u/...` lets it publish on its own topics only: a stolen or
+  misconfigured device cannot inject readings for another station. The ingestor may
+  subscribe, not publish. Integration tests attack a real broker set up like Compose's:
+  plain MQTT, wrong password, another station's password, anonymous login, a spoofed topic
+  and a publishing ingestor are all refused.
+- **Least privilege in the database too.** The ingestor writes with an insert-only role:
+  it cannot read, update or delete readings, nor read the quality flags. Duplicates still
+  vanish without SELECT because the insert uses `ON CONFLICT DO NOTHING` without naming the
+  key (naming it requires SELECT, and a column-level grant does not survive TimescaleDB's
+  compressed internal table, which is how this was found).
+- **Generated secrets.** The CA, certificates and passwords are created by
+  `sensor-pipeline provision-broker` (owner-only files, ECDSA P-256 keys that an ESP32
+  handles cheaply). Rerunning keeps the CA and the passwords already flashed into devices.
 - **TimescaleDB, not a separate time-series engine.** It is PostgreSQL: SQL, joins with
   reference tables, the usual tooling, plus daily chunks, columnar compression after 7 days,
   180-day retention and an hourly rollup refreshed in the background.

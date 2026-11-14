@@ -29,7 +29,11 @@ than feature count. Every change should be something a recruiter can read.
   by lean-ctx: CI runs it.
 - pytest (unit; integration marked `integration`, real containers via testcontainers),
   ruff, mypy --strict
-- Docker Compose: broker, db (host port 5433), migrate, ingest, simulator, Grafana (host
+- Security: `provision.py` generates CA, broker cert, passwords, ACL (never commit them;
+  `secrets/` is ignored). Broker is TLS-only on 8883 with ACL `antilles/%u/...`;
+  ingestor uses DB role `sensor_ingestor` (insert-only) and must keep `on conflict do
+  nothing` without a conflict target. `tests/test_security.py` attacks a real broker.
+- Docker Compose: provision, broker, db (host port 5433), migrate, ingest, simulator, Grafana (host
   port 3001, anonymous read-only)
 - `grafana/`: provisioned datasource (read-only role `grafana_reader`, password from
   `GRAFANA_DB_PASSWORD`), dashboards JSON, alert rules YAML. Every SQL query in them is

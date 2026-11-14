@@ -4,13 +4,25 @@
 
 #include <cstdint>
 
+// Also the station's MQTT username: the broker's ACL only lets it publish on
+// antilles/<STATION_ID>/telemetry and antilles/<STATION_ID>/status.
 #define STATION_ID "gp-pap-01"
 
 #define WIFI_SSID "your-ssid"
 #define WIFI_PASSWORD "your-password"
 
-// The broker of docker-compose.yml, seen from the station's network.
-#define MQTT_URI "mqtt://192.168.1.10:1883"
+// TLS only. The address must appear in the broker certificate:
+//   sensor-pipeline provision-broker --out <dir> --hostname 192.168.1.10
+#define MQTT_URI "mqtts://192.168.1.10:8883"
+// This station's entry in credentials.json, written by provision-broker.
+#define MQTT_PASSWORD "paste-the-station-password"
+
+// ca.crt from provision-broker: the station trusts this CA and nothing else, so it cannot
+// be pointed at an impostor broker.
+static const char kBrokerCaPem[] = R"PEM(-----BEGIN CERTIFICATE-----
+paste ca.crt here
+-----END CERTIFICATE-----
+)PEM";
 
 // Same cadence as the simulator: one reading per 10-second slot.
 constexpr uint32_t kIntervalS = 10;

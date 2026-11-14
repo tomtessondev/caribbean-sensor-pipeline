@@ -1,4 +1,4 @@
-"""Command-line entry point: `sensor-pipeline migrate | simulate | ingest`."""
+"""Command-line entry point: `sensor-pipeline migrate | provision-broker | simulate | ingest`."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import typer
 from sensor_pipeline.config import Settings
 from sensor_pipeline.db import Store, migrate
 from sensor_pipeline.ingest import ingest as run_ingest
+from sensor_pipeline.provision import BROKER_HOSTNAMES, provision_broker
 from sensor_pipeline.publisher import simulate as run_simulation
 from sensor_pipeline.stations import STATIONS
 
@@ -39,10 +40,30 @@ def migrate_command(
     grafana_password: str | None = typer.Option(
         None, envvar="GRAFANA_DB_PASSWORD", help="Enables the read-only grafana_reader login"
     ),
+    ingestor_password: str | None = typer.Option(
+        None, envvar="INGESTOR_DB_PASSWORD", help="Enables the insert-only sensor_ingestor login"
+    ),
 ) -> None:
     """Create or upgrade the TimescaleDB schema and register the stations."""
-    applied = migrate(Settings().db_dsn, grafana_password)
+    applied = migrate(Settings().db_dsn, grafana_password, ingestor_password)
     typer.echo(f"Applied {len(applied)} migration(s): {', '.join(applied) or 'none'}")
+
+
+@app.command("provision-broker")
+def provision_broker_command(
+    out: Path = typer.Option(..., help="Directory for the certificates, passwords and ACL"),
+    hostname: list[str] = typer.Option(
+        [],
+        help="Extra name or IP the broker is reached at (e.g. its LAN address for real "
+        "stations); 'broker', 'localhost' and 127.0.0.1 are always included",
+    ),
+) -> None:
+    """Generate the broker's TLS certificates, one password per station and the ACL.
+    Keeps what already exists: rerunning never invalidates a device's credentials."""
+    written = provision_broker(
+        out, [s.station_id for s in STATIONS], [*BROKER_HOSTNAMES, *hostname]
+    )
+    typer.echo(f"Wrote {', '.join(written)} to {out}")
 
 
 @app.command()
