@@ -196,7 +196,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "PM10",
-      "description": "Mean per interval. The red line is the EU daily limit (50 µg/m³).",
+      "description": "Mean per interval of validated readings: values flagged as a stuck sensor or an isolated spike are left out (see Fleet health > Data quality). The red line is the EU daily limit (50 µg/m³).",
       "gridPos": { "x": 10, "y": 4, "w": 14, "h": 14 },
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
       "targets": [
@@ -205,7 +205,7 @@
           "format": "time_series",
           "editorMode": "code",
           "rawQuery": true,
-          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.pm10_ugm3) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
+          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.pm10_ugm3) as value\nfrom telemetry_clean t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
         }
       ],
       "fieldConfig": {
@@ -230,6 +230,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "PM2.5",
+      "description": "Validated readings, like PM10.",
       "gridPos": { "x": 0, "y": 18, "w": 12, "h": 9 },
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
       "targets": [
@@ -238,7 +239,7 @@
           "format": "time_series",
           "editorMode": "code",
           "rawQuery": true,
-          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.pm2_5_ugm3) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
+          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.pm2_5_ugm3) as value\nfrom telemetry_clean t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
         }
       ],
       "fieldConfig": {

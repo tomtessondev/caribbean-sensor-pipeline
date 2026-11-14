@@ -65,6 +65,8 @@ def test_dashboards_are_well_formed() -> None:
         ids = [panel["id"] for panel in board["panels"]]
         assert len(ids) == len(set(ids)), f"duplicate panel id in {path.name}"
         for panel in board["panels"]:
+            if panel["type"] == "row":  # a section header, no query
+                continue
             assert panel["datasource"]["uid"] == DATASOURCE_UID, panel["title"]
             assert panel["targets"], panel["title"]
 

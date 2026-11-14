@@ -177,6 +177,65 @@
       ],
       "fieldConfig": { "defaults": { "custom": { "align": "auto", "cellOptions": { "type": "auto" } } }, "overrides": [] },
       "options": { "showHeader": true, "cellHeight": "sm" }
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "Data quality",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 27, "w": 24, "h": 1 },
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "bargauge",
+      "title": "Quality score today",
+      "description": "Share of the readings expected today (one per 10-second slot) that arrived and passed every rule. Low means lost messages, flagged values, or both.",
+      "gridPos": { "x": 0, "y": 28, "w": 8, "h": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "select s.town, q.quality_score\nfrom station_quality_daily q join stations s using (station_id)\nwhere q.day = time_bucket('1 day', now(), 'America/Guadeloupe') and q.station_id in ($station)\norder by s.territory, s.town"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 90,
+          "max": 100,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 95 }, { "color": "green", "value": 98 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Flagged readings per hour",
+      "description": "pm_stuck: same PM10 value 30 times in a row. pm_spike: more than 3 times the surrounding readings. implausible_weather: impossible for a sea-level Caribbean town. Flagged readings are kept in the raw table and left out of the air-quality charts.",
+      "gridPos": { "x": 8, "y": 28, "w": 16, "h": 9 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "select time_bucket('1 hour', ts) as time, flag as metric, count(*) as value\nfrom reading_flags\nwhere $__timeFilter(ts) and station_id in ($station)\ngroup by 1, 2 order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0, "min": 0, "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" }, "lineWidth": 1, "showPoints": "never" }, "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
     }
   ]
 }

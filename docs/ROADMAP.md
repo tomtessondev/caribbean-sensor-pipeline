@@ -10,7 +10,7 @@
    an offline buffer replayed on reconnection, the same JSON contract. CI runs the logic
    tests on the host and builds the firmware; simulating the whole board with Wokwi is
    left for later (it needs an account token).
-4. **Data quality.** Detect stuck sensors and spikes in SQL, flag readings instead of
+4. **Data quality** (done). Detect stuck sensors and spikes in SQL, flag readings instead of
    deleting them, publish a per-station quality score.
 5. **Security.** TLS on the broker, one username/password (or client certificate) per
    station, ACLs so a station can only publish on its own topics.
