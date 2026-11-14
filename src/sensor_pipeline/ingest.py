@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Protocol
 
 import paho.mqtt.client as mqtt
-from paho.mqtt.enums import CallbackAPIVersion
 from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
 from pydantic import ValidationError
@@ -35,6 +34,8 @@ from sensor_pipeline.messages import (
     parse_status,
     station_from_topic,
 )
+from sensor_pipeline.mqtt import new_client
+from sensor_pipeline.provision import load_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,10 @@ def ingest(
         reason_code: ReasonCode,
         _properties: Properties | None,
     ) -> None:
+        if reason_code.is_failure:
+            # Wrong credentials or not authorised: paho keeps retrying, the log says why.
+            logger.error("Broker refused the connection: %s", reason_code)
+            return
         logger.info("Connected to the broker: %s", reason_code)
         # Subscribing here re-subscribes after every reconnection.
         client.subscribe([(TELEMETRY_SUBSCRIPTION, 1), (STATUS_SUBSCRIPTION, 1)])
@@ -185,10 +190,17 @@ def ingest(
     def on_message(_client: mqtt.Client, _userdata: object, msg: mqtt.MQTTMessage) -> None:
         inbox.put(Incoming(msg.topic, bytes(msg.payload), datetime.now(UTC)))
 
+    password = settings.mqtt_password
+    if password is None and settings.mqtt_username and settings.mqtt_credentials_file:
+        password = load_credentials(settings.mqtt_credentials_file)[settings.mqtt_username]
     # A persistent session (clean_session=False) makes the broker queue QoS 1 messages
     # while the ingestor restarts, so a deployment loses nothing.
-    client = mqtt.Client(
-        CallbackAPIVersion.VERSION2, client_id="sensor-ingestor", clean_session=False
+    client = new_client(
+        settings,
+        "sensor-ingestor",
+        username=settings.mqtt_username,
+        password=password,
+        clean_session=False,
     )
     client.on_connect = on_connect
     client.on_subscribe = on_subscribe

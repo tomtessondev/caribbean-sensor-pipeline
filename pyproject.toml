@@ -7,6 +7,8 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Tom Tesson" }]
 dependencies = [
+    # Local certificate authority for the broker's TLS (provision-broker).
+    "cryptography>=43",
     "paho-mqtt>=2.1",
     "psycopg[binary]>=3.2",
     "pydantic>=2.8",

@@ -12,5 +12,5 @@
    left for later (it needs an account token).
 4. **Data quality** (done). Detect stuck sensors and spikes in SQL, flag readings instead of
    deleting them, publish a per-station quality score.
-5. **Security.** TLS on the broker, one username/password (or client certificate) per
+5. **Security** (done). TLS on the broker, one username/password (or client certificate) per
    station, ACLs so a station can only publish on its own topics.

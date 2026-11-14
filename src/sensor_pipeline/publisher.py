@@ -8,10 +8,11 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import paho.mqtt.client as mqtt
-from paho.mqtt.enums import CallbackAPIVersion
 
 from sensor_pipeline.config import Settings
 from sensor_pipeline.messages import status_topic, telemetry_topic
+from sensor_pipeline.mqtt import new_client
+from sensor_pipeline.provision import load_credentials
 from sensor_pipeline.simulator import DUST_EPOCH, FaultRates, StationSimulator, dust_episodes
 from sensor_pipeline.stations import Station
 
@@ -19,13 +20,18 @@ logger = logging.getLogger(__name__)
 
 
 class StationClient:
-    """An MQTT session for one station. The broker publishes the last will ("offline",
-    retained) if the connection drops without a clean disconnect."""
+    """An MQTT session for one station, logged in as the station itself (its id is its
+    username, so the broker's ACL confines it to its own topics). The broker publishes the
+    last will ("offline", retained) if the connection drops without a clean disconnect."""
 
-    def __init__(self, station_id: str, settings: Settings) -> None:
+    def __init__(self, station_id: str, settings: Settings, password: str | None = None) -> None:
         self.station_id = station_id
-        self._client = mqtt.Client(
-            CallbackAPIVersion.VERSION2, client_id=f"sim-{station_id}", clean_session=True
+        self._client = new_client(
+            settings,
+            f"sim-{station_id}",
+            username=station_id if password is not None else None,
+            password=password,
+            clean_session=True,
         )
         self._client.will_set(status_topic(station_id), "offline", qos=1, retain=True)
         self._client.connect(settings.mqtt_host, settings.mqtt_port, keepalive=30)
@@ -65,7 +71,15 @@ def simulate(
         StationSimulator(station, episodes, seed, faults or FaultRates(), interval_s)
         for station in stations
     ]
-    clients = {s.station_id: StationClient(s.station_id, settings) for s in stations}
+    credentials = (
+        load_credentials(settings.mqtt_credentials_file)
+        if settings.mqtt_credentials_file is not None
+        else {}
+    )
+    clients = {
+        s.station_id: StationClient(s.station_id, settings, credentials.get(s.station_id))
+        for s in stations
+    }
     published = 0
     pending: list[mqtt.MQTTMessageInfo] = []
 

@@ -7,6 +7,7 @@
 //   there (up to an hour), and are replayed oldest first on reconnection.
 // - QoS 1 with esp-mqtt's outbox: a reading the broker has not acknowledged is resent.
 // - Last will "offline" (retained) on the status topic; "online" on every connection.
+// - TLS (mqtts://) verified against the project CA, and a per-station login.
 #include <Adafruit_BME280.h>
 #include <Arduino.h>
 #include <WiFi.h>
@@ -71,6 +72,11 @@ void startMqtt() {
   esp_mqtt_client_config_t config = {};
   config.uri = MQTT_URI;
   config.client_id = STATION_ID;
+  // TLS against the project's own CA only, hostname checked; then the station's login,
+  // which the broker's ACL ties to this station's topics.
+  config.cert_pem = kBrokerCaPem;
+  config.username = STATION_ID;
+  config.password = MQTT_PASSWORD;
   config.keepalive = 30;
   config.lwt_topic = statusTopic;
   config.lwt_msg = "offline";

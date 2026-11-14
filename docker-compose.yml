@@ -1,24 +1,43 @@
 # The whole pipeline on a laptop: broker, database, migrations, ingestor, six stations and
 # Grafana. Grafana on http://localhost:3001 (admin / admin), database on localhost:5433,
-# broker on localhost:1883.
+# broker on localhost:8883 (TLS, login required; the CA is in the broker-secrets volume).
 
 x-app: &app
   build: .
   image: caribbean-sensor-pipeline
   environment:
     MQTT_HOST: broker
-    MQTT_PORT: "1883"
+    MQTT_PORT: "8883"
+    MQTT_TLS_CA: /broker/ca.crt
+    MQTT_CREDENTIALS_FILE: /broker/credentials.json
     SENSOR_DB_DSN: postgresql://sensors:sensors@db:5432/sensors
     GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local}
+    INGESTOR_DB_PASSWORD: ${INGESTOR_DB_PASSWORD:-ingestor-local}
+  volumes:
+    - broker-secrets:/broker:ro
 
 services:
+  # Generates the CA, the broker certificate, one password per station and the ACL on the
+  # first start; later starts keep them.
+  provision:
+    <<: *app
+    command: ["provision-broker", "--out", "/broker"]
+    volumes:
+      - broker-secrets:/broker
+
   broker:
     image: eclipse-mosquitto:2.0.22
+    entrypoint: ["/bin/sh", "/docker/broker-entrypoint.sh"]
     ports:
-      - "1883:1883"
+      - "8883:8883"
     volumes:
       - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker/broker-entrypoint.sh:/docker/broker-entrypoint.sh:ro
+      - broker-secrets:/broker:ro
       - broker-data:/mosquitto/data
+    depends_on:
+      provision:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   db:
@@ -47,6 +66,14 @@ services:
   ingest:
     <<: *app
     command: ["ingest", "--ready-file", "/tmp/ingest-ready"]
+    environment:
+      MQTT_HOST: broker
+      MQTT_PORT: "8883"
+      MQTT_TLS_CA: /broker/ca.crt
+      MQTT_USERNAME: ingestor
+      MQTT_CREDENTIALS_FILE: /broker/credentials.json
+      # Insert-only database role (migration 004), not the owner.
+      SENSOR_DB_DSN: postgresql://sensor_ingestor:${INGESTOR_DB_PASSWORD:-ingestor-local}@db:5432/sensors
     depends_on:
       broker:
         condition: service_started
@@ -89,6 +116,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  broker-secrets:
   broker-data:
   db-data:
   grafana-data:
