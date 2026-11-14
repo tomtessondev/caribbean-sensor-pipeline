@@ -60,11 +60,14 @@ def dust_episodes(seed: int, start: datetime, days: int) -> list[DustEpisode]:
 
 @dataclass(frozen=True)
 class FaultRates:
-    """Per-reading probabilities."""
+    """Per-reading probabilities. At one reading per 10 s: about 1 % of messages lost, a
+    particle sensor hanging for 5 to 30 minutes about every 14 hours, and a glitch about
+    every 6 hours. (A 0.2 % hang rate had the sensors stuck 20 % of the time, which the
+    data-quality rules duly reported.)"""
 
     drop: float = 0.01
-    stuck_start: float = 0.002
-    spike: float = 0.002
+    stuck_start: float = 0.0002
+    spike: float = 0.0005
 
 
 # Plumes travel westward: one hour of delay per tenth of a degree west of Sainte-Anne.

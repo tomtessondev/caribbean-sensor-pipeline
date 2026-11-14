@@ -31,7 +31,11 @@ def publish_raw(host: str, port: int, topic: str, payload: str) -> None:
 
 
 def test_migrations_are_idempotent(dsn: str) -> None:
-    assert migrate(dsn) == ["001_schema.sql", "002_station_health.sql"]
+    assert migrate(dsn) == [
+        "001_schema.sql",
+        "002_station_health.sql",
+        "003_data_quality.sql",
+    ]
     assert migrate(dsn) == []
     assert query(dsn, "select count(*) from stations") == [(6,)]
 

@@ -18,9 +18,10 @@ embedded world I come from.
  ─────────────────────────────────►  antilles/<id>/telemetry  ──►  validate (pydantic)  ──►  telemetry (hypertable)
    BME280 + PMS5003 + battery         antilles/<id>/status         batch: 500 rows / 2 s      telemetry_hourly (continuous aggregate)
    QoS 1, last will "offline"         (retained)                   rejects ──────────────►    ingest_errors, station_status
-                                                                                                         │ station_health (view)
-                                                                                     Grafana ◄───────────┘ read-only role
-                                                                            dashboards + alerts as code
+                                                                         flag_readings (job, every 5 min) ──► reading_flags
+                                                                                                         │ telemetry_clean, station_health,
+                                                                                     Grafana ◄───────────┘ station_quality_daily (views)
+                                                                            dashboards + alerts as code    read-only role
 ```
 
 | Part | Tooling | Where |
@@ -31,6 +32,7 @@ embedded world I come from.
 | Broker | Eclipse Mosquitto 2 | `docker/mosquitto.conf` |
 | Ingestion | paho-mqtt, batching, idempotent inserts, dead-letter table | `src/sensor_pipeline/ingest.py`, `db.py` |
 | Storage | TimescaleDB: hypertable, compression, retention, continuous aggregate | `src/sensor_pipeline/sql/` |
+| Data quality | SQL rules run by a TimescaleDB job: stuck sensor, spike, implausible weather; flags, a validated view, a daily quality score per station | `src/sensor_pipeline/sql/003_data_quality.sql` |
 | Monitoring | Grafana 12: provisioned datasource, two dashboards, three alert rules; read-only database role | `grafana/`, `src/sensor_pipeline/sql/002_station_health.sql` |
 | Quality | pytest (unit + integration on real containers), ruff, mypy `--strict` | `tests/`, `.github/workflows/ci.yml` |
 
@@ -93,6 +95,20 @@ make integration    # tests against real Mosquitto and TimescaleDB (needs Docker
   loaded at start; UI edits are not kept. Grafana connects with a `select`-only role whose
   password comes from the environment. CI runs every dashboard and alert query against a
   real TimescaleDB with that role, so a renamed column breaks the build, not a panel.
+- **Flag, don't delete.** Three SQL rules run every 5 minutes as a TimescaleDB job:
+  *pm_stuck* (the same PM10 value 30 times in a row), *pm_spike* (more than 3 times the
+  mean of the 30 surrounding readings, so a Saharan plume rising over hours is not
+  flagged but an isolated glitch is) and *implausible_weather* (fine for the sensor,
+  impossible for a sea-level Caribbean town). Flags go to `reading_flags`; the raw table is
+  never modified; `telemetry_clean` hides only the suspect values (a stuck PM sensor does
+  not invalidate the temperature) and the air-quality charts read it.
+- **Checked by arrival, not by timestamp.** The rules look at everything received recently,
+  whatever its timestamp, so a station replaying an hour of buffered readings after an
+  outage gets checked too.
+- **One quality number.** `station_quality_daily` gives, per station and local day, the
+  share of expected readings (one per slot) that arrived and passed every rule: lost
+  messages and suspect values both lower it. The rules also caught the simulator itself:
+  its first fault rates had the particle sensors stuck 20 % of the time.
 
 ## Roadmap
 
