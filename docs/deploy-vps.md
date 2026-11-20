@@ -20,10 +20,11 @@ and no host port.
 2. **Build Pack: Docker Compose**, base directory `/`, Docker Compose location
    `/docker-compose.vps.yml`. Save: Coolify reads the file and lists its services.
 3. **Domains**, per service:
-   - `grafana`: `https://capteurs.horizon-studio.dev`
-   - `api`: `https://capteurs.horizon-studio.dev/v1`
+   - `grafana`: `https://capteurs.horizon-studio.dev:3000`
+   - `api`: `https://capteurs.horizon-studio.dev:8000/v1`
 
-   Coolify finds the ports from `expose:` (3000 and 8000); `https://` makes it request a
+   The `:3000` / `:8000` suffix tells Coolify which container port to route to (it is not
+   published on the host); `https://` makes it request a
    Let's Encrypt certificate. Traefik sends `/v1/...` to the API and everything else to
    Grafana.
 4. **Strip Prefixes: off** (Advanced, or the per-service option, depending on the Coolify
