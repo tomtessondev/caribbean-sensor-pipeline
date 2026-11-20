@@ -14,3 +14,7 @@
    deleting them, publish a per-station quality score.
 5. **Security** (done). TLS on the broker, one username/password (or client certificate) per
    station, ACLs so a station can only publish on its own topics.
+6. **Real stations** (in progress). A bridge from Météo-France's automatic weather stations
+   (Package Observations API) to MQTT, one session per station; a registry of the real
+   stations and an offline threshold per station; a read-only endpoint serving the latest
+   reading of each station to the portfolio site.

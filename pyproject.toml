@@ -27,6 +27,8 @@ dev = [
     "testcontainers>=4.8",
     # Tests read the Grafana provisioning files.
     "pyyaml>=6.0",
+    # Replays recorded Météo-France responses: tests never call the real API.
+    "respx>=0.21",
 ]
 # Builds and tests the ESP32 firmware in firmware/.
 firmware = [

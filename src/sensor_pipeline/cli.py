@@ -1,20 +1,28 @@
-"""Command-line entry point: `sensor-pipeline migrate | provision-broker | simulate | ingest`."""
+"""Command-line entry point:
+`sensor-pipeline migrate | provision-broker | simulate | bridge | ingest`."""
 
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import threading
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import typer
 
+from sensor_pipeline.bridge import POLL_S, Bridge, mqtt_sessions
+from sensor_pipeline.bridge import run as run_bridge
 from sensor_pipeline.config import Settings
 from sensor_pipeline.db import Store, migrate
 from sensor_pipeline.ingest import ingest as run_ingest
+from sensor_pipeline.meteofrance import MeteoFranceClient
 from sensor_pipeline.provision import BROKER_HOSTNAMES, provision_broker
 from sensor_pipeline.publisher import simulate as run_simulation
-from sensor_pipeline.registry import StationSource, seeded_stations
+from sensor_pipeline.registry import StationSource, load_registry, seeded_stations
 from sensor_pipeline.stations import STATIONS
 
 app = typer.Typer(help="Antilles sensor pipeline", no_args_is_help=True)
@@ -93,6 +101,36 @@ def simulate(
         stop=_stop_on_signals(),
     )
     typer.echo(f"Published {published} readings")
+
+
+@app.command()
+def bridge(
+    poll: float = typer.Option(POLL_S, min=10, help="Seconds between two looks at the API"),
+    application_id_file: Path = typer.Option(
+        Path("secrets/meteofrance_application_id"),
+        envvar="METEOFRANCE_APPLICATION_ID_FILE",
+        help="File holding the Météo-France application id (or set METEOFRANCE_APPLICATION_ID)",
+    ),
+) -> None:
+    """Publish the readings of Météo-France's automatic stations until stopped, each
+    station on its own MQTT session (provision the broker with STATION_SOURCE=meteofrance)."""
+    application_id = os.getenv("METEOFRANCE_APPLICATION_ID") or (
+        application_id_file.read_text(encoding="utf-8").strip()
+    )
+    settings = Settings()
+    registry = load_registry()
+    sessions = mqtt_sessions(settings, registry)
+    with httpx.Client(timeout=60) as http:
+        run_bridge(
+            Bridge(
+                MeteoFranceClient(http, application_id, time.monotonic),
+                registry,
+                sessions,
+                lambda: datetime.now(UTC),
+            ),
+            _stop_on_signals(),
+            poll,
+        )
 
 
 @app.command()

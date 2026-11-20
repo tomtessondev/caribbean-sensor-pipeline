@@ -7,6 +7,6 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
-# One image, three roles: `migrate`, `ingest`, `simulate` (see docker-compose.yml).
+# One image, several roles: `migrate`, `ingest`, `simulate`, `bridge` (see docker-compose.yml).
 ENTRYPOINT ["sensor-pipeline"]
 CMD ["--help"]

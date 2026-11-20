@@ -3,7 +3,9 @@
 An IoT data pipeline for air-quality sensor stations in **Guadeloupe and Martinique**:
 devices publish over **MQTT**, an ingestion service validates and batches the readings into
 **TimescaleDB**, and **Grafana** shows air quality and fleet health and raises alerts, all
-provisioned as code. Six stations are simulated with realistic physics and faults, and an
+provisioned as code. The stations are either six simulated ones (realistic physics and
+faults) or the 80 real automatic weather stations of **Météo-France** in Guadeloupe,
+Martinique, Saint-Barthélemy and Saint-Martin, bridged from its API; an
 [ESP32 firmware](firmware/) (BME280 + PMS5003) speaks the same contract, tested on the host
 and built in CI.
 
@@ -28,6 +30,7 @@ embedded world I come from.
 | --- | --- | --- |
 | Message contract | JSON over MQTT, versioned, validated with pydantic | `src/sensor_pipeline/messages.py` |
 | Stations | Simulator: diurnal cycle, atmospheric tide, Saharan dust plumes, solar battery, faults | `src/sensor_pipeline/simulator.py`, `publisher.py` |
+| Real stations | Météo-France Package Observations API (OAuth2, httpx), a versioned registry of 80 stations, one MQTT session per station | `src/sensor_pipeline/meteofrance.py`, `bridge.py`, `registry.py`, `data/` |
 | Firmware | ESP32, C++17, PlatformIO: PMS5003 frame decoder, store-and-forward ring buffer, esp-mqtt QoS 1; Unity tests on the host; golden message shared with the Python tests | `firmware/` |
 | Broker | Eclipse Mosquitto 2: TLS only, a login per client, per-station ACL | `docker/mosquitto.conf`, `docker/broker-entrypoint.sh` |
 | Security material | Local CA and broker certificate (cryptography, ECDSA P-256), random passwords, ACL; generated, never committed | `src/sensor_pipeline/provision.py` |
@@ -40,8 +43,17 @@ embedded world I come from.
 ## Quick start
 
 ```bash
-docker compose up -d --build        # certificates, broker, database, migrations, ingestor, simulator, Grafana
+make up                             # certificates, broker, database, migrations, ingestor, simulator, Grafana
 docker compose logs -f ingest       # "Wrote 500 new readings ..."
+```
+
+Real stations instead of the simulator (on a fresh stack, `make down` then remove the
+volumes, or at least the `broker-secrets` one):
+
+```bash
+echo -n '<application id>' > secrets/meteofrance_application_id   # from portail-api.meteofrance.fr, never committed
+make up STATION_SOURCE=meteofrance  # registers the 80 stations, one broker login each, starts the bridge
+docker compose logs -f bridge       # "Published 47 readings"
 ```
 
 The broker listens on `localhost:8883`, TLS only, with a login. On the first start the
@@ -131,6 +143,30 @@ make integration    # tests against real Mosquitto and TimescaleDB (needs Docker
   share of expected readings (one per slot) that arrived and passed every rule: lost
   messages and suspect values both lower it. The rules also caught the simulator itself:
   its first fault rates had the particle sensors stuck 20 % of the time.
+
+## Real stations: the Météo-France bridge
+
+- **A registry, not a guess.** `src/sensor_pipeline/data/meteofrance_antilles.csv` lists
+  the 80 stations of the four territories that report a temperature (of 96 listed), with
+  their Météo-France id, a contract id (`gp-rai-01`: territory from the INSEE commune code,
+  three letters from the commune, a counter) and their offline threshold. It was built
+  once from the API by `scripts/build_registry.py` and is reviewed like code.
+- **Two deliveries, two reads.** Every station measures every 6 minutes, but about half
+  publish each reading within minutes and the others send the past hour in one batch.
+  The bridge reads the package of each 6-minute slot 10 minutes after it and again 80
+  minutes after it, and publishes each reading once. `seq` is the number of 6-minute
+  slots since the epoch, so a missing reading shows as a gap, as for a device.
+- **A station is a station.** Each one gets its own MQTT session, broker login and last
+  will: the ACL, the ingestor, the quality rules and Grafana do not know the difference.
+  Units follow the contract: temperature K to °C, humidity in %, sea-level pressure Pa to
+  hPa (the station pressure of a 1141 m mountain station would fail the plausibility rule).
+- **Offline is per station.** `stations.offline_after_s` is 5 minutes for a simulated
+  station, 30 for a prompt Météo-France one and 100 for a batched one; the fleet table
+  and the *Station offline* alert use it.
+- **The API is never called in tests.** A real package recorded by
+  `scripts/record_package.py` is replayed with respx, through a real broker and database
+  in the integration test. The token is cached until a minute before it expires and a 401
+  gets one new token and one retry.
 
 ## Roadmap
 

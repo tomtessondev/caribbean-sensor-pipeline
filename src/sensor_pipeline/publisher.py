@@ -24,11 +24,17 @@ class StationClient:
     username, so the broker's ACL confines it to its own topics). The broker publishes the
     last will ("offline", retained) if the connection drops without a clean disconnect."""
 
-    def __init__(self, station_id: str, settings: Settings, password: str | None = None) -> None:
+    def __init__(
+        self,
+        station_id: str,
+        settings: Settings,
+        password: str | None = None,
+        client_prefix: str = "sim",
+    ) -> None:
         self.station_id = station_id
         self._client = new_client(
             settings,
-            f"sim-{station_id}",
+            f"{client_prefix}-{station_id}",
             username=station_id if password is not None else None,
             password=password,
             clean_session=True,
