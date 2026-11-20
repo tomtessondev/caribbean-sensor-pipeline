@@ -25,8 +25,8 @@ than feature count. Every change should be something a recruiter can read.
     `offline_after_s` comes from observed cadence (`scripts/classify_cadence.py`, run on
     a database with a few hours of real data): 6000 s for 6-minute stations, 10800 s
     for hourly or never-seen ones
-  - `meteofrance.py` (API client, OAuth2 token from `secrets/meteofrance_application_id`,
-    never printed; invalid observations skipped one by one) and `bridge.py` (each slot
+  - `meteofrance.py` (API client, OAuth2 token from the application id in
+    `METEOFRANCE_APPLICATION_ID`, else `secrets/meteofrance_application_id`, never printed; invalid observations skipped one by one) and `bridge.py` (each slot
     read twice, at +10 and +80 min, each pass catching up on missed slots up to 3 h
     back; one MQTT session per station, acks awaited once per tick; a tick never stops
     the bridge). Tests replay `tests/fixtures/meteofrance/`; never call the real API in
@@ -56,6 +56,9 @@ than feature count. Every change should be something a recruiter can read.
 - Docker Compose: provision, broker, db (host port 5433), migrate, ingest, simulator (profile
   `simulated`) or bridge (profile `meteofrance`), api (host port 8010), Grafana (host port 3001,
   anonymous read-only)
+- Production: `docker-compose.vps.yml` for Coolify (no `ports:`, Coolify-generated
+  `SERVICE_PASSWORD_*`, memory limits, broker and Grafana config baked in by
+  `docker/*.Dockerfile`), documented in `docs/deploy-vps.md`
 - `grafana/`: provisioned datasource (read-only role `grafana_reader`, password from
   `GRAFANA_DB_PASSWORD`), dashboards JSON, alert rules YAML. Every SQL query in them is
   executed by `tests/test_grafana.py`: keep them runnable after schema changes.
