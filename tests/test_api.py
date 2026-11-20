@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -9,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg.conninfo import make_conninfo
 
-from sensor_pipeline.api import SITE_ORIGINS, create_app
+from sensor_pipeline.api import SITE_ORIGINS, connect, create_app
 from sensor_pipeline.db import Store, migrate
 from sensor_pipeline.messages import Telemetry
 
@@ -164,3 +165,46 @@ def test_site_reader_sees_the_view_only(site_dsn: str) -> None:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(f"select * from {table} limit 1")
             conn.rollback()
+
+
+@pytest.mark.parametrize(
+    "headers", [{}, {"Origin": SITE_ORIGINS[0]}, {"Origin": "https://evil.example"}]
+)
+def test_answers_vary_on_origin(client: TestClient, headers: dict[str, str]) -> None:
+    """The CORS header depends on Origin: a cache must not serve one origin's answer to
+    another, including the answer to a request without Origin."""
+    response = client.get("/v1/stations", headers=headers)
+
+    assert "origin" in [v.strip().lower() for v in response.headers["vary"].split(",")]
+
+
+def test_queries_are_bounded_in_time(site_dsn: str) -> None:
+    with connect(site_dsn) as conn:
+        assert conn.execute("show statement_timeout").fetchone() == ("2s",)
+        with pytest.raises(psycopg.errors.QueryCanceled):
+            conn.execute("select pg_sleep(3)")
+
+
+def test_no_api_description_is_published(client: TestClient) -> None:
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 404
+
+
+def test_health_is_503_when_the_database_is_unreachable() -> None:
+    # 10.255.255.1 is not routed: without connect_timeout the request would hang.
+    client = TestClient(create_app("postgresql://site_reader:x@10.255.255.1:5432/sensors"))
+
+    started = time.monotonic()
+    response = client.get("/health")
+
+    assert response.status_code == 503
+    assert time.monotonic() - started < 6
+
+
+def test_stations_is_503_when_the_database_is_unreachable() -> None:
+    client = TestClient(create_app("postgresql://site_reader:x@127.0.0.1:1/sensors"))
+
+    response = client.get("/v1/stations")
+
+    assert response.status_code == 503
+    assert "origin" in response.headers["vary"].lower()

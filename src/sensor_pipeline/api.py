@@ -5,17 +5,31 @@ asks caches to keep each answer a minute (stations publish every 6 minutes at mo
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Literal
 
 import psycopg
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from psycopg.rows import class_row
+from fastapi.responses import JSONResponse
+from psycopg.rows import TupleRow, class_row
 from pydantic import AwareDatetime, BaseModel
+from starlette.responses import Response as StarletteResponse
 
 SITE_ORIGINS = ("https://antilles-data-pipeline.vercel.app", "http://localhost:3000")
 CACHE_CONTROL = "public, max-age=60"
+# A database that does not answer must not hold the request (and a worker) for long.
+CONNECT_TIMEOUT_S = 3
+STATEMENT_TIMEOUT_MS = 2000
+
+
+def connect(dsn: str) -> psycopg.Connection[TupleRow]:
+    return psycopg.connect(
+        dsn,
+        connect_timeout=CONNECT_TIMEOUT_S,
+        options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+    )
 
 
 class StationOut(BaseModel):
@@ -52,9 +66,23 @@ def create_app(dsn: str) -> FastAPI:
         allow_credentials=False,
     )
 
+    @app.middleware("http")
+    async def vary_on_origin(
+        request: Request, call_next: Callable[[Request], Awaitable[StarletteResponse]]
+    ) -> StarletteResponse:
+        """The CORS answer depends on Origin, so every /v1 answer must say so to caches,
+        including the one to a request without Origin (CORSMiddleware only marks the
+        others)."""
+        response = await call_next(request)
+        if request.url.path.startswith("/v1/"):
+            vary = [v.strip().lower() for v in response.headers.get("vary", "").split(",")]
+            if "origin" not in vary:
+                response.headers.append("Vary", "Origin")
+        return response
+
     @app.get("/v1/stations")
     def stations(response: Response) -> StationsOut:
-        with psycopg.connect(dsn) as conn, conn.cursor(row_factory=class_row(StationOut)) as cur:
+        with connect(dsn) as conn, conn.cursor(row_factory=class_row(StationOut)) as cur:
             cur.execute(
                 "select station_id, name, territory, lat, lon, ts, temperature_c,"
                 " humidity_pct, pressure_hpa, pm10_ugm3, status"
@@ -66,8 +94,14 @@ def create_app(dsn: str) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        with psycopg.connect(dsn) as conn:
+        with connect(dsn) as conn:
             conn.execute("select 1 from station_latest limit 1")
         return {"status": "ok"}
+
+    @app.exception_handler(psycopg.OperationalError)
+    def database_unavailable(_request: Request, _exc: psycopg.OperationalError) -> JSONResponse:
+        """Database down, unreachable or too slow (statement timeout): a temporary state,
+        not a bug of the endpoint."""
+        return JSONResponse({"detail": "database unavailable"}, status_code=503)
 
     return app
