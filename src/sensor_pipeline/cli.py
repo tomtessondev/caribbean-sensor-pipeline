@@ -119,9 +119,17 @@ def bridge(
 ) -> None:
     """Publish the readings of Météo-France's automatic stations until stopped, each
     station on its own MQTT session (provision the broker with STATION_SOURCE=meteofrance)."""
-    application_id = os.getenv("METEOFRANCE_APPLICATION_ID") or (
-        application_id_file.read_text(encoding="utf-8").strip()
-    )
+    application_id = os.getenv("METEOFRANCE_APPLICATION_ID")
+    if not application_id:
+        # Docker mounts a missing file as an empty directory: say what is missing
+        # instead of crash-looping on IsADirectoryError.
+        if not application_id_file.is_file():
+            raise typer.BadParameter(
+                f"{application_id_file} is not a file: put the Météo-France application id "
+                "in secrets/meteofrance_application_id (or set METEOFRANCE_APPLICATION_ID)",
+                param_hint="--application-id-file",
+            )
+        application_id = application_id_file.read_text(encoding="utf-8").strip()
     settings = Settings()
     registry = load_registry()
     sessions = mqtt_sessions(settings, registry)
