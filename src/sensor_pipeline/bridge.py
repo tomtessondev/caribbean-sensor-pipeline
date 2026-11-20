@@ -3,9 +3,10 @@
 Every station measures every 6 minutes, but the readings reach the API in two ways: most
 within about 8 minutes, the others in one batch per hour, up to an hour late. The bridge
 therefore reads each 6-minute slot twice: 10 minutes after it (prompt stations) and 80
-minutes after it (the batches). Each reading not sent yet is published on the station's
-own MQTT session, logged in with the station's own credentials and last will, so the
-broker's ACL and everything downstream are the same as for a physical station.
+minutes after it (the batches), and after a pause (laptop asleep, API down) catches up on
+every slot it missed, up to 3 hours back. Each reading not sent yet is published on the
+station's own MQTT session, logged in with the station's own credentials and last will,
+so the broker's ACL and everything downstream are the same as for a physical station.
 """
 
 from __future__ import annotations
@@ -77,26 +78,45 @@ class Bridge:
         self._unknown: set[str] = set()
         # Stations that published during the current tick, whose acks are awaited.
         self._touched: set[str] = set()
-        # (slot, pass) already read.
-        self.fetched: set[tuple[datetime, int]] = set()
+        # The last slot each pass read.
+        self.last_read: dict[int, datetime] = {}
 
     def tick(self) -> int:
-        """Read the slots that are due and publish what is new. Returns readings published."""
+        """Read the slots that are due and publish what is new. Returns readings published.
+        Each pass reads every slot due since the last one it read, back to WINDOW at most:
+        after a sleep or an outage the gap is filled. A failing pass is logged and resumes
+        from its last slot on the next tick; it does not stop the other pass."""
         now = self._clock()
         published = 0
         self._touched.clear()
         try:
             for index, delay in enumerate(PASSES):
-                at = slot(now - delay)
-                if (at, index) in self.fetched:
-                    continue
-                for obs in self._api.package(at):
-                    published += self._handle(obs, now)
-                self.fetched.add((at, index))
+                try:
+                    for at in self._due(index, slot(now - delay), now):
+                        for obs in self._api.package(at):
+                            published += self._handle(obs, now)
+                        self.last_read[index] = at
+                except TICK_ERRORS as exc:
+                    logger.warning("Pass %d failed, resuming next tick: %r", index, exc)
         finally:
             self._wait_for_acks()
         self._forget(now)
         return published
+
+    def _due(self, index: int, latest: datetime, now: datetime) -> list[datetime]:
+        last = self.last_read.get(index)
+        if last is None:
+            return [latest]
+        step = timedelta(seconds=SLOT_S)
+        oldest = slot(now - WINDOW)
+        if oldest < now - WINDOW:
+            oldest += step
+        at = max(last + step, oldest)
+        due = []
+        while at <= latest:
+            due.append(at)
+            at += step
+        return due
 
     def _wait_for_acks(self) -> None:
         deadline = time.monotonic() + ACK_TIMEOUT_S
@@ -136,7 +156,6 @@ class Bridge:
     def _forget(self, now: datetime) -> None:
         for times in self._sent.values():
             times.difference_update({t for t in times if t < now - WINDOW})
-        self.fetched = {(at, i) for at, i in self.fetched if at >= now - WINDOW}
 
 
 class Publisher(Protocol):

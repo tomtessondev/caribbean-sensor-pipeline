@@ -110,6 +110,67 @@ def test_slots_are_read_ten_and_eighty_minutes_late() -> None:
     ]
 
 
+def slots(first: datetime, last: datetime) -> list[datetime]:
+    count = int((last - first) / timedelta(minutes=6)) + 1
+    return [first + k * timedelta(minutes=6) for k in range(count)]
+
+
+def test_missed_slots_are_caught_up_after_a_pause() -> None:
+    """A laptop asleep for an hour, or an API down for an hour: on the next tick each pass
+    reads every slot it missed, in order."""
+    api, sessions, clock = FakeApi(), Sessions(), Clock()
+    b = bridge(api, sessions, clock)
+    b.tick()
+    api.requested.clear()
+    clock.now += timedelta(hours=1)
+
+    b.tick()
+
+    hour = timedelta(hours=1)
+    assert api.requested == [
+        *slots(FIRST_PASS + timedelta(minutes=6), FIRST_PASS + hour),
+        *slots(SECOND_PASS + timedelta(minutes=6), SECOND_PASS + hour),
+    ]
+
+
+def test_catch_up_goes_back_three_hours_at_most() -> None:
+    api, sessions, clock = FakeApi(), Sessions(), Clock()
+    b = bridge(api, sessions, clock)
+    b.tick()
+    api.requested.clear()
+    clock.now += timedelta(hours=10)
+
+    b.tick()
+
+    oldest = datetime(2026, 11, 20, 11, 12, tzinfo=UTC)  # first slot after now - 3 h
+    assert api.requested == [
+        *slots(oldest, FIRST_PASS + timedelta(hours=10)),
+        *slots(oldest, SECOND_PASS + timedelta(hours=10)),
+    ]
+
+
+def test_a_failing_pass_does_not_skip_the_other_and_is_retried() -> None:
+    api, sessions, clock = FakeApi(), Sessions(), Clock()
+    api.packages[SECOND_PASS] = [obs(DESAIX.mf_id, SECOND_PASS)]
+    failing = FIRST_PASS
+
+    def package(at: datetime) -> list[Observation]:
+        api.requested.append(at)
+        if at == failing:
+            raise httpx.ConnectError("unreachable")
+        return api.packages.get(at, [])
+
+    api.package = package  # type: ignore[method-assign]  # fail on one slot only
+    b = bridge(api, sessions, clock)
+
+    assert b.tick() == 1  # the second pass ran although the first one failed
+    failing = datetime.min.replace(tzinfo=UTC)
+    api.requested.clear()
+    b.tick()
+
+    assert api.requested == [FIRST_PASS]  # the failed slot, read again
+
+
 def test_each_station_publishes_with_its_own_session() -> None:
     api, sessions, clock = FakeApi(), Sessions(), Clock()
     api.packages[FIRST_PASS] = [obs(RAIZET.mf_id, FIRST_PASS), obs(DESAIX.mf_id, FIRST_PASS)]
@@ -214,7 +275,7 @@ def test_run_survives_api_errors_and_closes_sessions() -> None:
         return calls >= 2  # two ticks, then stop
 
     stop.wait = wait  # type: ignore[method-assign]  # a fake wait instead of real sleeping
-    b.fetched.clear()  # make the next tick ask the API again
+    b.last_read.clear()  # make the next tick ask the API again
 
     run(b, stop, poll_s=120)
 
