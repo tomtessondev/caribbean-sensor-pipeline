@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from sensor_pipeline.registry import (
+    COMMUNES,
     OFFLINE_AFTER_S,
     REGISTRY_PATH,
     TERRITORIES,
@@ -20,6 +21,7 @@ from sensor_pipeline.registry import (
 from sensor_pipeline.stations import STATIONS
 
 ID_PATTERN = re.compile(r"^[a-z]{2}-[a-z]{3}-\d{2}$")
+SIMULATED_IDS = {s.station_id for s in STATIONS}
 
 
 def test_registry_ids_follow_the_contract() -> None:
@@ -38,35 +40,58 @@ def test_registry_ids_follow_the_contract() -> None:
         assert 14 < station.latitude < 19 and -64 < station.longitude < -60, station
 
 
-def test_station_ids_come_from_the_commune_code_and_name() -> None:
+def test_station_ids_come_from_the_commune_code() -> None:
     ids = make_station_ids(
-        [
-            ("97101014", "LES ABYMES CHAZEAU_SAPC"),
-            ("97123001", "ST-BARTHELEMY METEO"),
-            ("97127002", "ST-MARTIN MARIGOT GENDARMERIE"),
-            ("97209002", "FORT-D-FRANCE-DONIS"),
-            ("97209004", "FORT-DE-FRANCE DESAIX"),
-            ("97116002", "MORNE-A-L'EAU BLANCHET"),
-            ("97125011", "SAINT FRANCOIS AERODROME"),
-            ("97125001", "ST-FRANCOIS RENEVILLE"),
-            ("97227001", "STE- LUCE_CTM"),
-            ("97206001", "DIAMANT - JACQUA"),
-        ]
+        ["97101014", "97101015", "97123001", "97127002", "97125011", "97125001", "97206001"]
     )
 
     assert ids == {
+        # Le Raizet is in Les Abymes: same commune, same letters.
         "97101014": "gp-aby-01",
+        "97101015": "gp-aby-02",
         "97123001": "bl-sba-01",
         "97127002": "mf-sma-01",
-        "97209002": "mq-fdf-01",
-        "97209004": "mq-fdf-02",
-        "97116002": "gp-mal-01",
         # Counted in Météo-France id order, whatever the input order.
         "97125001": "gp-sfr-01",
         "97125011": "gp-sfr-02",
-        "97227001": "mq-slu-01",
         "97206001": "mq-dia-01",
     }
+
+
+def test_an_id_of_the_simulator_is_skipped() -> None:
+    """mq-fdf-01 is the simulated Fort-de-France station: a real one must never take it,
+    or switching sources would merge two histories."""
+    ids = make_station_ids(["97209002", "97209004", "97213004"])
+
+    assert ids == {"97209002": "mq-fdf-02", "97209004": "mq-fdf-03", "97213004": "mq-lam-02"}
+
+
+def test_each_commune_has_its_own_letters() -> None:
+    letters = [code for code, _name in COMMUNES.values()]
+
+    assert len(set(letters)) == len(letters)
+    assert all(re.fullmatch("[a-z]{3}", code) for code in letters)
+
+
+def test_registry_ids_are_unambiguous() -> None:
+    registry = load_registry(REGISTRY_PATH)
+    letters_of_commune: dict[str, set[str]] = {}
+    communes_of_letters: dict[str, set[str]] = {}
+    for s in registry:
+        letters = s.station_id.split("-")[1]
+        letters_of_commune.setdefault(s.mf_id[:5], set()).add(letters)
+        communes_of_letters.setdefault(letters, set()).add(s.mf_id[:5])
+
+    assert all(len(v) == 1 for v in letters_of_commune.values()), letters_of_commune
+    assert all(len(v) == 1 for v in communes_of_letters.values()), communes_of_letters
+    assert not SIMULATED_IDS & {s.station_id for s in registry}
+    # The committed ids are the ones make_station_ids gives.
+    assert make_station_ids(s.mf_id for s in registry) == {s.mf_id: s.station_id for s in registry}
+
+
+def test_commune_outside_the_table_is_refused() -> None:
+    with pytest.raises(ValueError, match="97199"):
+        make_station_ids(["97199001"])
 
 
 def test_simulated_source_keeps_the_six_stations_and_their_threshold() -> None:
@@ -80,9 +105,9 @@ def test_meteofrance_source_seeds_the_registry_only() -> None:
     seeded = seeded_stations("meteofrance")
 
     assert [s.station_id for s in seeded] == [s.station_id for s in load_registry(REGISTRY_PATH)]
-    # Some ids exist in both networks (mq-fdf-01 is Fort-de-France either way): what
-    # matters is that no simulated station is registered.
+    # Neither a simulated town nor a simulated id.
     assert not {s.town for s in STATIONS} & {s.town for s in seeded}
+    assert not SIMULATED_IDS & {s.station_id for s in seeded}
 
 
 def test_unknown_source_is_refused() -> None:

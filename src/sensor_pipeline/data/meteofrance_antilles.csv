@@ -3,13 +3,14 @@ bl-sba-01,97123001,St-Barthelemy Meteo,Saint-Barthélemy,17.901500,-62.852167,60
 bl-sba-02,97123005,St-Barthelemy Aero,Saint-Barthélemy,17.902833,-62.838000,6000
 gp-abe-01,97102005,Anse-Bertrand La Joyeuse,Guadeloupe,16.474333,-61.487667,6000
 gp-aby-01,97101014,Les Abymes Chazeau Sapc,Guadeloupe,16.287500,-61.453167,6000
+gp-aby-02,97101015,Le Raizet Aero,Guadeloupe,16.264000,-61.516333,6000
 gp-bai-01,97104005,Baillif Aero,Guadeloupe,16.012167,-61.740167,6000
 gp-bma-01,97103008,Baie-Mahault Convenance Sapc,Guadeloupe,16.242833,-61.590667,6000
 gp-cbe-01,97107002,Capesterre-B-Eau Neufchateau,Guadeloupe,16.078500,-61.600000,6000
 gp-cbe-02,97107009,Capesterre-Be Bois Debout Sapc,Guadeloupe,16.021667,-61.585833,6000
 gp-des-01,97110001,La Desirade Gendarmerie,Guadeloupe,16.297833,-61.095833,6000
 gp-des-02,97110002,La Desirade Meteo,Guadeloupe,16.335000,-61.004000,6000
-gp-des-03,97111004,Deshaies Jardin,Guadeloupe,16.300000,-61.791833,6000
+gp-dsh-01,97111004,Deshaies Jardin,Guadeloupe,16.300000,-61.791833,6000
 gp-gbo-01,97112003,Grand-Bourg Les Basses Aero,Guadeloupe,15.869500,-61.272167,6000
 gp-gos-01,97113009,Le Gosier Leroux Sapc,Guadeloupe,16.246333,-61.471167,6000
 gp-gou-01,97109003,Gourbeyre Gros-Morne Dole,Guadeloupe,16.003167,-61.672500,6000
@@ -19,8 +20,7 @@ gp-pbo-01,97118018,Petit-Bourg Gros-Morne Sapc,Guadeloupe,16.155500,-61.623000,6
 gp-plo-01,97122004,Port-Louis Gendarmerie,Guadeloupe,16.421833,-61.525167,6000
 gp-pno-01,97121002,Pointe-Noire Col Des Mamelles,Guadeloupe,16.179500,-61.724667,6000
 gp-pno-02,97121005,Pointe-Noire Bellevue,Guadeloupe,16.232167,-61.776333,6000
-gp-poi-01,97121006,Pointe Noire Morphy,Guadeloupe,16.252333,-61.799167,6000
-gp-rai-01,97101015,Le Raizet Aero,Guadeloupe,16.264000,-61.516333,6000
+gp-pno-03,97121006,Pointe Noire Morphy,Guadeloupe,16.252333,-61.799167,6000
 gp-san-01,97128010,Sainte-Anne Deshauteurs Sapc,Guadeloupe,16.253333,-61.429833,6000
 gp-scl-01,97124006,St-Claude Matouba Sapc,Guadeloupe,16.046333,-61.693667,6000
 gp-scl-02,97124010,St-Claude Maison-Volcan Sapc,Guadeloupe,16.036000,-61.665333,6000
@@ -36,46 +36,46 @@ mf-sma-01,97127002,St-Martin Marigot Gendarmerie,Saint-Martin,18.067333,-63.0706
 mf-sma-02,97127004,St-Martin Grand-Case,Saint-Martin,18.100667,-63.048000,6000
 mq-abo-01,97201001,Ajoupa-Bouillon Eden,Martinique,14.811833,-61.120333,6000
 mq-ans-01,97202002,Anse D'Arlet Ctm,Martinique,14.466333,-61.067667,6000
-mq-bch-01,97203003,Bassepointe-Chal,Martinique,14.850000,-61.098333,6000
+mq-bpo-01,97203003,Bassepointe-Chal,Martinique,14.850000,-61.098333,6000
 mq-dia-01,97206001,Diamant - Jacqua,Martinique,14.484667,-61.023167,6000
 mq-duc-01,97207002,Ducos,Martinique,14.541833,-60.976833,6000
-mq-fch-01,97210001,Francois-Chopot,Martinique,14.630333,-60.919667,6000
-mq-fdc-01,97208001,Fond-Denis-Cadet,Martinique,14.735333,-61.145000,6000
-mq-fdf-01,97209002,Fort-D-France-Donis,Martinique,14.676833,-61.089667,6000
-mq-fdf-02,97209004,Fort-De-France Desaix,Martinique,14.617667,-61.063833,6000
-mq-fdf-03,97209007,Fort-D-France-Pte Negres,Martinique,14.599333,-61.090333,6000
-mq-ffr-01,97209017,Fort-France Colson Ctm,Martinique,14.693667,-61.088333,6000
-mq-fsi-01,97210004,Francois-Simon,Martinique,14.590167,-60.869000,6000
+mq-fdf-02,97209002,Fort-D-France-Donis,Martinique,14.676833,-61.089667,6000
+mq-fdf-03,97209004,Fort-De-France Desaix,Martinique,14.617667,-61.063833,6000
+mq-fdf-04,97209007,Fort-D-France-Pte Negres,Martinique,14.599333,-61.090333,6000
+mq-fdf-05,97209017,Fort-France Colson Ctm,Martinique,14.693667,-61.088333,6000
+mq-fra-01,97210001,Francois-Chopot,Martinique,14.630333,-60.919667,6000
+mq-fra-02,97210004,Francois-Simon,Martinique,14.590167,-60.869000,6000
+mq-fsd-01,97208001,Fond-Denis-Cadet,Martinique,14.735333,-61.145000,6000
 mq-gmo-01,97212004,Gros-Morne Bellevue Sapc,Martinique,14.735167,-61.055333,6000
 mq-gmo-02,97212007,Gros-Morne Boislez Ctm,Martinique,14.725000,-61.042167,6000
-mq-gra-01,97211003,Grandriviere Ctm,Martinique,14.874500,-61.180500,6000
-mq-lae-01,97213004,Lamentin-Aero,Martinique,14.595333,-60.995667,6000
+mq-gri-01,97211003,Grandriviere Ctm,Martinique,14.874500,-61.180500,6000
+mq-lam-02,97213004,Lamentin-Aero,Martinique,14.595333,-60.995667,6000
 mq-lor-01,97214001,Lorrain Vallon,Martinique,14.829167,-61.049333,6000
 mq-lor-02,97214005,Lorrain Pirogue Ctm,Martinique,14.805500,-61.101000,6000
+mq-mac-01,97215001,Macouba-Bell.,Martinique,14.861833,-61.143833,6000
+mq-mac-02,97215002,Macouba-Potiche Ctm,Martinique,14.874833,-61.151167,6000
 mq-mar-01,97217003,Marin,Martinique,14.467333,-60.859333,6000
-mq-mbe-01,97215001,Macouba-Bell.,Martinique,14.861833,-61.143833,6000
-mq-mbe-02,97216002,Marigot-Bellevu Ctm,Martinique,14.807500,-61.033667,6000
-mq-mpo-01,97215002,Macouba-Potiche Ctm,Martinique,14.874833,-61.151167,6000
-mq-mrc-01,97218002,Morne-Rouge-Champ,Martinique,14.755000,-61.109833,6000
-mq-psa-01,97219006,Precheur-Savst Ctm,Martinique,14.800333,-61.198833,6000
+mq-mgt-01,97216002,Marigot-Bellevu Ctm,Martinique,14.807500,-61.033667,6000
+mq-mro-01,97218002,Morne-Rouge-Champ,Martinique,14.755000,-61.109833,6000
+mq-pre-01,97219006,Precheur-Savst Ctm,Martinique,14.800333,-61.198833,6000
+mq-rob-01,97222002,Robert-Pte Fort,Martinique,14.679667,-60.925500,6000
 mq-rpi-01,97220005,Riviere-Pilote Capron,Martinique,14.494167,-60.879667,6000
 mq-rpi-02,97220007,Riviere-Pilote Stade Ctm,Martinique,14.485000,-60.909667,6000
-mq-rpt-01,97222002,Robert-Pte Fort,Martinique,14.679667,-60.925500,6000
-mq-san-01,97226004,Ste Anne-Seci Ctm,Martinique,14.438000,-60.870833,6000
-mq-san-02,97226006,Ste Anne-Salines,Martinique,14.397500,-60.877833,6000
+mq-sae-01,97226004,Ste Anne-Seci Ctm,Martinique,14.438000,-60.870833,6000
+mq-sae-02,97226006,Ste Anne-Salines,Martinique,14.397500,-60.877833,6000
 mq-ses-01,97223001,St-Esprit Gend,Martinique,14.560167,-60.940667,6000
 mq-ses-02,97223003,St-Esprit Bald Ctm,Martinique,14.566667,-60.899500,6000
 mq-sjo-01,97224001,St-Joseph Rabuch,Martinique,14.679000,-61.056667,6000
 mq-sjo-02,97224004,St-Joseph Lezard,Martinique,14.658500,-60.998500,6000
 mq-sjo-03,97224011,St-Joseph Bparc Ctm,Martinique,14.676333,-61.060500,6000
 mq-slu-01,97227001,Ste- Luce Ctm,Martinique,14.490500,-60.979667,6000
-mq-sma-01,97228001,Ste-Marie Gend,Martinique,14.779167,-60.989167,6000
-mq-sma-02,97228006,Ste Marie Perou Ctm,Martinique,14.761167,-61.024167,6000
+mq-smr-01,97228001,Ste-Marie Gend,Martinique,14.779167,-60.989167,6000
+mq-smr-02,97228006,Ste Marie Perou Ctm,Martinique,14.761167,-61.024167,6000
 mq-spi-01,97225001,St-Pierre Depaz,Martinique,14.757167,-61.166333,6000
 mq-spi-02,97225007,St-Pierre Ctm,Martinique,14.754667,-61.180333,6000
-mq-tca-01,97230001,Trinite-Caravel,Martinique,14.774500,-60.875333,6000
 mq-til-01,97231002,Trois-Ilets Golf,Martinique,14.537167,-61.043000,6000
-mq-tre-01,97230007,Trinite-Reservoir Ctm,Martinique,14.737833,-60.977000,6000
-mq-tsp-01,97230002,Trinite-Spoutou,Martinique,14.750667,-60.923500,6000
+mq-tri-01,97230001,Trinite-Caravel,Martinique,14.774500,-60.875333,6000
+mq-tri-02,97230002,Trinite-Spoutou,Martinique,14.750667,-60.923500,6000
+mq-tri-03,97230007,Trinite-Reservoir Ctm,Martinique,14.737833,-60.977000,6000
 mq-vau-01,97232003,Vauclin,Martinique,14.551833,-60.836667,6000
-mq-vra-01,97232005,Vauclin-Raquett Ctm,Martinique,14.537000,-60.875833,6000
+mq-vau-02,97232005,Vauclin-Raquett Ctm,Martinique,14.537000,-60.875833,6000

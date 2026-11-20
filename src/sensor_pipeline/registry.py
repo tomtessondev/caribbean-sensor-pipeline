@@ -6,7 +6,6 @@ Météo-France automatic weather stations (a versioned CSV built once by
 from __future__ import annotations
 
 import csv
-import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -153,43 +152,98 @@ def territory_prefix(mf_id: str) -> str:
     raise ValueError(f"{mf_id} is not a station of the French Antilles")
 
 
-_ARTICLES = {"LE", "LA", "LES"}
-_SAINTS = {"ST", "STE", "SAINT", "SAINTE"}
+# Three letters per commune, keyed by its INSEE code (the first five digits of a Météo-France
+# station id). Station ids are permanent once deployed, so the letters are chosen by hand,
+# never derived from station names (which spell the same commune several ways): one commune,
+# one code, and no two communes share a code, across the four territories.
+COMMUNES: dict[str, tuple[str, str]] = {
+    "97101": ("aby", "Les Abymes"),
+    "97102": ("abe", "Anse-Bertrand"),
+    "97103": ("bma", "Baie-Mahault"),
+    "97104": ("bai", "Baillif"),
+    "97105": ("bte", "Basse-Terre"),
+    "97106": ("bou", "Bouillante"),
+    "97107": ("cbe", "Capesterre-Belle-Eau"),
+    "97108": ("cmg", "Capesterre-de-Marie-Galante"),
+    "97109": ("gou", "Gourbeyre"),
+    "97110": ("des", "La Désirade"),
+    "97111": ("dsh", "Deshaies"),
+    "97112": ("gbo", "Grand-Bourg"),
+    "97113": ("gos", "Le Gosier"),
+    "97114": ("goy", "Goyave"),
+    "97115": ("lmn", "Lamentin"),
+    "97116": ("mal", "Morne-à-l'Eau"),
+    "97117": ("mou", "Le Moule"),
+    "97118": ("pbo", "Petit-Bourg"),
+    "97119": ("pca", "Petit-Canal"),
+    "97120": ("pap", "Pointe-à-Pitre"),
+    "97121": ("pno", "Pointe-Noire"),
+    "97122": ("plo", "Port-Louis"),
+    "97123": ("sba", "Saint-Barthélemy"),
+    "97124": ("scl", "Saint-Claude"),
+    "97125": ("sfr", "Saint-François"),
+    "97126": ("slo", "Saint-Louis"),
+    "97127": ("sma", "Saint-Martin"),
+    "97128": ("san", "Sainte-Anne (Guadeloupe)"),
+    "97129": ("sro", "Sainte-Rose"),
+    "97130": ("tdb", "Terre-de-Bas"),
+    "97131": ("tdh", "Terre-de-Haut"),
+    "97132": ("trv", "Trois-Rivières"),
+    "97133": ("vfo", "Vieux-Fort"),
+    "97134": ("vha", "Vieux-Habitants"),
+    "97201": ("abo", "L'Ajoupa-Bouillon"),
+    "97202": ("ans", "Les Anses-d'Arlet"),
+    "97203": ("bpo", "Basse-Pointe"),
+    "97204": ("car", "Le Carbet"),
+    "97205": ("cpi", "Case-Pilote"),
+    "97206": ("dia", "Le Diamant"),
+    "97207": ("duc", "Ducos"),
+    "97208": ("fsd", "Fonds-Saint-Denis"),
+    "97209": ("fdf", "Fort-de-France"),
+    "97210": ("fra", "Le François"),
+    "97211": ("gri", "Grand'Rivière"),
+    "97212": ("gmo", "Gros-Morne"),
+    "97213": ("lam", "Le Lamentin"),
+    "97214": ("lor", "Le Lorrain"),
+    "97215": ("mac", "Macouba"),
+    "97216": ("mgt", "Le Marigot"),
+    "97217": ("mar", "Le Marin"),
+    "97218": ("mro", "Le Morne-Rouge"),
+    "97219": ("pre", "Le Prêcheur"),
+    "97220": ("rpi", "Rivière-Pilote"),
+    "97221": ("rsa", "Rivière-Salée"),
+    "97222": ("rob", "Le Robert"),
+    "97223": ("ses", "Saint-Esprit"),
+    "97224": ("sjo", "Saint-Joseph"),
+    "97225": ("spi", "Saint-Pierre"),
+    "97226": ("sae", "Sainte-Anne (Martinique)"),
+    "97227": ("slu", "Sainte-Luce"),
+    "97228": ("smr", "Sainte-Marie"),
+    "97229": ("sch", "Schœlcher"),
+    "97230": ("tri", "La Trinité"),
+    "97231": ("til", "Les Trois-Îlets"),
+    "97232": ("vau", "Le Vauclin"),
+    "97233": ("mve", "Le Morne-Vert"),
+    "97234": ("bel", "Bellefontaine"),
+}
 
 
-def commune_letters(name: str) -> str:
-    """Three letters for the commune that starts a Météo-France station name, e.g.
-    "FORT-DE-FRANCE DESAIX" -> fdf, "LES ABYMES CHAZEAU_SAPC" -> aby,
-    "ST-BARTHELEMY METEO" -> sba, "MORNE-A-L'EAU BLANCHET" -> mal."""
-    words = [w.strip("-") for w in re.split(r"[\s_]+", name.upper()) if w.strip("-")]
-    commune = words[0]
-    # "SAINT FRANCOIS", "STE- LUCE", "LES ABYMES": the commune spans two words.
-    if commune in _ARTICLES | _SAINTS and len(words) > 1:
-        commune = f"{commune}-{words[1]}"
-    parts = [p for p in (re.sub("[^A-Z]", "", p) for p in commune.split("-")) if p]
-    if parts[0] in _ARTICLES and len(parts) > 1:
-        parts = parts[1:]
-    if parts[0] in _SAINTS and len(parts) > 1:
-        letters = "s" + parts[1][:2]
-    elif len(parts) >= 3:
-        letters = "".join(p[0] for p in parts[:3])
-    elif len(parts) == 2:
-        letters = parts[0][0] + parts[1][:2]
-    else:
-        letters = parts[0][:3]
-    if len(letters) != 3:
-        raise ValueError(f"cannot derive three letters from {name!r}")
-    return letters.lower()
-
-
-def make_station_ids(stations: Iterable[tuple[str, str]]) -> dict[str, str]:
-    """Map (Météo-France id, name) pairs to contract ids `<territory>-<commune>-NN`, the
-    counter running in Météo-France id order so that the result does not depend on the
-    input order."""
+def make_station_ids(mf_ids: Iterable[str]) -> dict[str, str]:
+    """Map Météo-France ids to contract ids `<territory>-<commune letters>-NN`, the counter
+    running in Météo-France id order so that the result does not depend on the input
+    order. An id the simulator uses (mq-fdf-01...) is skipped: mixing the two sources must
+    never merge two stations' histories."""
+    taken = {s.station_id for s in STATIONS}
     counters: dict[str, int] = defaultdict(int)
     ids = {}
-    for mf_id, name in sorted(stations):
-        stem = f"{territory_prefix(mf_id)}-{commune_letters(name)}"
-        counters[stem] += 1
-        ids[mf_id] = f"{stem}-{counters[stem]:02d}"
+    for mf_id in sorted(mf_ids):
+        commune = COMMUNES.get(mf_id[:5])
+        if commune is None:
+            raise ValueError(f"commune {mf_id[:5]} of station {mf_id} is not in COMMUNES")
+        stem = f"{territory_prefix(mf_id)}-{commune[0]}"
+        station_id = stem
+        while station_id == stem or station_id in taken:
+            counters[stem] += 1
+            station_id = f"{stem}-{counters[stem]:02d}"
+        ids[mf_id] = station_id
     return ids

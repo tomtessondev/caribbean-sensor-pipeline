@@ -78,7 +78,7 @@ def main() -> None:
 
     known = {s.mf_id: s.offline_after_s for s in load_registry()} if REGISTRY_PATH.exists() else {}
     kept = [r for r in rows if r["Id_station"] in with_temperature]
-    ids = make_station_ids((r["Id_station"], r["Nom_usuel"]) for r in kept)
+    ids = make_station_ids(r["Id_station"] for r in kept)
     save_registry(
         RegistryStation(
             station_id=ids[r["Id_station"]],
