@@ -11,6 +11,10 @@ x-app: &app
     MQTT_TLS_CA: /broker/ca.crt
     MQTT_CREDENTIALS_FILE: /broker/credentials.json
     SENSOR_DB_DSN: postgresql://sensors:sensors@db:5432/sensors
+    # simulated (the six simulated stations) or meteofrance (the real stations of
+    # src/sensor_pipeline/data/meteofrance_antilles.csv): what migrate registers and what
+    # provision creates broker logins for.
+    STATION_SOURCE: ${STATION_SOURCE:-simulated}
     GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local}
     INGESTOR_DB_PASSWORD: ${INGESTOR_DB_PASSWORD:-ingestor-local}
   volumes:

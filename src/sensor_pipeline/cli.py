@@ -14,6 +14,7 @@ from sensor_pipeline.db import Store, migrate
 from sensor_pipeline.ingest import ingest as run_ingest
 from sensor_pipeline.provision import BROKER_HOSTNAMES, provision_broker
 from sensor_pipeline.publisher import simulate as run_simulation
+from sensor_pipeline.registry import StationSource, seeded_stations
 from sensor_pipeline.stations import STATIONS
 
 app = typer.Typer(help="Antilles sensor pipeline", no_args_is_help=True)
@@ -25,6 +26,14 @@ def main(verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logg
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
+
+
+SOURCE_OPTION = typer.Option(
+    "simulated",
+    envvar="STATION_SOURCE",
+    help="Station network: the six simulated stations, or the registry of real "
+    "Météo-France stations",
+)
 
 
 def _stop_on_signals() -> threading.Event:
@@ -43,9 +52,10 @@ def migrate_command(
     ingestor_password: str | None = typer.Option(
         None, envvar="INGESTOR_DB_PASSWORD", help="Enables the insert-only sensor_ingestor login"
     ),
+    source: StationSource = SOURCE_OPTION,
 ) -> None:
     """Create or upgrade the TimescaleDB schema and register the stations."""
-    applied = migrate(Settings().db_dsn, grafana_password, ingestor_password)
+    applied = migrate(Settings().db_dsn, grafana_password, ingestor_password, source)
     typer.echo(f"Applied {len(applied)} migration(s): {', '.join(applied) or 'none'}")
 
 
@@ -57,11 +67,12 @@ def provision_broker_command(
         help="Extra name or IP the broker is reached at (e.g. its LAN address for real "
         "stations); 'broker', 'localhost' and 127.0.0.1 are always included",
     ),
+    source: StationSource = SOURCE_OPTION,
 ) -> None:
     """Generate the broker's TLS certificates, one password per station and the ACL.
     Keeps what already exists: rerunning never invalidates a device's credentials."""
     written = provision_broker(
-        out, [s.station_id for s in STATIONS], [*BROKER_HOSTNAMES, *hostname]
+        out, [s.station_id for s in seeded_stations(source)], [*BROKER_HOSTNAMES, *hostname]
     )
     typer.echo(f"Wrote {', '.join(written)} to {out}")
 

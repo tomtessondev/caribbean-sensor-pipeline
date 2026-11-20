@@ -36,7 +36,7 @@
           "format": "table",
           "editorMode": "code",
           "rawQuery": true,
-          "rawSql": "select town as \"Station\", territory as \"Territory\", status as \"Status\", minutes_since_last_reading as \"Last reading (min ago)\", battery_v as \"Battery\", rssi_dbm as \"RSSI\", loss_pct_24h as \"Loss 24 h\", case when pm10_stuck then 'stuck' else 'ok' end as \"PM sensor\"\nfrom station_health where station_id in ($station) order by territory, town"
+          "rawSql": "select town as \"Station\", territory as \"Territory\", status as \"Status\", minutes_since_last_reading as \"Last reading (min ago)\", offline_after_s / 60 as \"Offline after (min)\", battery_v as \"Battery\", rssi_dbm as \"RSSI\", loss_pct_24h as \"Loss 24 h\", case when pm10_stuck then 'stuck' else 'ok' end as \"PM sensor\"\nfrom station_health where station_id in ($station) order by territory, town"
         }
       ],
       "fieldConfig": {

@@ -13,7 +13,7 @@ from psycopg import sql
 from psycopg.rows import TupleRow
 
 from sensor_pipeline.messages import StationStatus, Telemetry
-from sensor_pipeline.stations import STATIONS
+from sensor_pipeline.registry import StationSource, seeded_stations
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +32,13 @@ TELEMETRY_COLUMNS = (
 
 
 def migrate(
-    dsn: str, grafana_password: str | None = None, ingestor_password: str | None = None
+    dsn: str,
+    grafana_password: str | None = None,
+    ingestor_password: str | None = None,
+    source: StationSource = "simulated",
 ) -> list[str]:
-    """Apply the SQL files not applied yet, in name order, register the stations and let
+    """Apply the SQL files not applied yet, in name order, register the stations of
+    `source` (the simulated network or the registry of real stations) and let
     the least-privileged roles log in when given a password: `grafana_reader` (read-only)
     and `sensor_ingestor` (insert-only). Returns the files applied."""
     # Autocommit: TimescaleDB policies and continuous aggregates refuse explicit
@@ -57,20 +61,25 @@ def migrate(
             conn.execute(script.read_text(encoding="utf-8").encode())
             conn.execute("insert into schema_migrations (name) values (%s)", (script.name,))
             applied.append(script.name)
+        stations = seeded_stations(source)
         conn.execute(
             """
-            insert into stations (station_id, town, territory, latitude, longitude)
-            select * from unnest(%s::text[], %s::text[], %s::text[], %s::float8[], %s::float8[])
+            insert into stations (station_id, town, territory, latitude, longitude,
+                                  offline_after_s)
+            select * from unnest(%s::text[], %s::text[], %s::text[], %s::float8[],
+                                 %s::float8[], %s::int[])
             on conflict (station_id) do update set
                 town = excluded.town, territory = excluded.territory,
-                latitude = excluded.latitude, longitude = excluded.longitude
+                latitude = excluded.latitude, longitude = excluded.longitude,
+                offline_after_s = excluded.offline_after_s
             """,
             (
-                [s.station_id for s in STATIONS],
-                [s.town for s in STATIONS],
-                [s.territory for s in STATIONS],
-                [s.latitude for s in STATIONS],
-                [s.longitude for s in STATIONS],
+                [s.station_id for s in stations],
+                [s.town for s in stations],
+                [s.territory for s in stations],
+                [s.latitude for s in stations],
+                [s.longitude for s in stations],
+                [s.offline_after_s for s in stations],
             ),
         )
         for role, password in (

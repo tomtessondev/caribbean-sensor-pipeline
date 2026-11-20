@@ -57,7 +57,8 @@ Grafana on http://localhost:3001 (read-only without login; `admin` / `admin` to 
   signal, message loss and stuck-sensor flag; battery and RSSI over time, loss per hour,
   the latest rejected messages.
 - **Alerts** (Alerting > Alert rules): *Saharan dust episode* (PM10 hourly mean above 50 for
-  15 min), *Station offline* (no reading for 5 min), *Particle sensor stuck* (same value
+  15 min), *Station offline* (no reading for longer than the station's own threshold: 5 min
+  for a simulated station, 30 or 100 min for a Météo-France one), *Particle sensor stuck* (same value
   for 30 min). One alert instance per station.
 
 ```bash
