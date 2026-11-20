@@ -8,8 +8,8 @@ from __future__ import annotations
 import csv
 import re
 from collections import defaultdict
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -28,11 +28,15 @@ TERRITORIES = {
 
 # The simulator publishes every 10 s: five silent minutes is a real outage.
 SIMULATED_OFFLINE_AFTER_S = 300
-# Météo-France stations all measure every 6 minutes but deliver in two ways. Prompt ones
-# are published about 8 minutes later and the bridge reads each slot 10 minutes after it:
-# 30 minutes of silence is an outage. The others send the past hour in one batch, up to an
-# hour late, which the bridge picks up on a second read 80 minutes after the slot.
-OFFLINE_AFTER_S = {"prompt": 1800, "hourly_batch": 6000}
+# Météo-France stations, by the cadence observed in their telemetry
+# (scripts/classify_cadence.py). A station with readings between the hours measures every
+# 6 minutes; whether it delivers them promptly or in an hourly batch, the bridge has
+# published its newest reading at most about 90 minutes after it was taken (second read
+# 80 minutes after the slot, plus a poll): 100 minutes of silence is an outage. A station
+# seen only on the hour may be read on that second pass only, so its newest reading can be
+# 140 minutes old; it gets 3 hours, as does a station never seen yet.
+OFFLINE_AFTER_S = {"six_minutes": 6000, "hourly": 10800}
+FIELDS = ("station_id", "mf_id", "name", "territory", "latitude", "longitude", "offline_after_s")
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,43 @@ def load_registry(path: Path = REGISTRY_PATH) -> list[RegistryStation]:
             )
             for row in csv.DictReader(f)
         ]
+
+
+def save_registry(stations: Iterable[RegistryStation], path: Path = REGISTRY_PATH) -> None:
+    """Write the registry sorted by station id, as `scripts/build_registry.py` built it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, lineterminator="\n")
+        writer.writerow(FIELDS)
+        for s in sorted(stations, key=lambda s: s.station_id):
+            writer.writerow(
+                [
+                    s.station_id,
+                    s.mf_id,
+                    s.name,
+                    s.territory,
+                    f"{s.latitude:.6f}",
+                    f"{s.longitude:.6f}",
+                    s.offline_after_s,
+                ]
+            )
+
+
+def with_observed_cadence(
+    stations: Iterable[RegistryStation], sub_hourly: Mapping[str, bool]
+) -> list[RegistryStation]:
+    """The stations with the offline threshold of their observed cadence. `sub_hourly`
+    maps a station id to whether any of its readings was taken off the hour; a station
+    absent from it was never seen and keeps the cautious hourly threshold."""
+    return [
+        replace(
+            s,
+            offline_after_s=OFFLINE_AFTER_S[
+                "six_minutes" if sub_hourly.get(s.station_id, False) else "hourly"
+            ],
+        )
+        for s in stations
+    ]
 
 
 def seeded_stations(source: StationSource) -> list[SeededStation]:

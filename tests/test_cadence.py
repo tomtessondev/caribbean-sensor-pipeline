@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import psycopg
 import pytest
 
 from sensor_pipeline.db import Store, migrate
@@ -30,29 +31,33 @@ def test_migrate_seeds_the_registry(dsn: str) -> None:
 def test_offline_follows_each_stations_threshold(dsn: str) -> None:
     migrate(dsn, source="meteofrance")
     registry = load_registry(REGISTRY_PATH)
-    prompt = next(s for s in registry if s.offline_after_s == OFFLINE_AFTER_S["prompt"])
-    batched = next(s for s in registry if s.offline_after_s == OFFLINE_AFTER_S["hourly_batch"])
-    late = next(
-        s for s in registry if s.offline_after_s == OFFLINE_AFTER_S["prompt"] and s != prompt
-    )
+    on_time, late, hourly = registry[:3]
+    # The registry holds 6-minute stations only today: make one hourly, as
+    # scripts/classify_cadence.py would for a station seen only on the hour.
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            "update stations set offline_after_s = %s where station_id = %s",
+            (OFFLINE_AFTER_S["hourly"], hourly.station_id),
+        )
     now = datetime.now(UTC).replace(microsecond=0)
     store = Store.connect(dsn)
     store.insert_readings(
         [
-            # 19 minutes of silence: normal for a station read about 10 minutes late.
-            Telemetry(station_id=prompt.station_id, ts=now - timedelta(minutes=19), seq=1),
-            # 80 minutes: normal for a station that sends its readings once an hour...
-            Telemetry(station_id=batched.station_id, ts=now - timedelta(minutes=80), seq=1),
-            # ...but an outage for a prompt one.
-            Telemetry(station_id=late.station_id, ts=now - timedelta(minutes=80), seq=1),
+            # 88 minutes of silence: normal for a 6-minute station delivering hourly
+            # batches, read 80 minutes late...
+            Telemetry(station_id=on_time.station_id, ts=now - timedelta(minutes=88), seq=1),
+            # ...110 minutes is an outage...
+            Telemetry(station_id=late.station_id, ts=now - timedelta(minutes=110), seq=1),
+            # ...but normal for an hourly station read on the second pass only.
+            Telemetry(station_id=hourly.station_id, ts=now - timedelta(minutes=140), seq=1),
         ]
     )
     store.close()
 
     rows = dict(query(dsn, "select station_id, offline_ratio from station_health"))
-    assert rows[prompt.station_id] < 1
-    assert rows[batched.station_id] < 1
+    assert rows[on_time.station_id] < 1
     assert rows[late.station_id] > 1
+    assert rows[hourly.station_id] < 1
 
 
 def test_simulated_stations_keep_five_minutes(dsn: str) -> None:

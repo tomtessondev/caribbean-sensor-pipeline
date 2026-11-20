@@ -56,7 +56,7 @@ groups:
               editorMode: code
               rawQuery: true
               # Silence divided by the station's own threshold (offline_after_s): 5 min
-              # for a simulated station, 30 or 100 min for a Météo-France one.
+              # for a simulated station, 100 min (6-minute) or 3 h (hourly) for a Météo-France one.
               rawSql: >-
                 select town as station, coalesce(offline_ratio, 99999) as silence_ratio
                 from station_health

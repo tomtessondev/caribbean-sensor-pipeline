@@ -6,10 +6,10 @@ application id from secrets/meteofrance_application_id and prints counts only.
 
     .venv/bin/python scripts/build_registry.py
 
-Every station measures every 6 minutes, but they do not deliver alike: some send each
-reading within minutes, others send the past hour's readings in one batch, up to an hour
-late. A station is kept when it reported a temperature in a complete package (two hours
-old) and counts as "prompt" when it is already in the package of 12 minutes ago.
+A station is kept when it reported a temperature in a complete package (two hours old).
+Its offline threshold is not guessed from one package: a station already in the registry
+keeps its own, a new one gets the cautious hourly threshold until
+`scripts/classify_cadence.py` has seen a few hours of its telemetry.
 """
 
 from __future__ import annotations
@@ -27,7 +27,10 @@ from sensor_pipeline.registry import (
     OFFLINE_AFTER_S,
     REGISTRY_PATH,
     TERRITORIES,
+    RegistryStation,
+    load_registry,
     make_station_ids,
+    save_registry,
     territory_prefix,
 )
 
@@ -72,33 +75,26 @@ def main() -> None:
         with_temperature = {
             obs["geo_id_insee"] for at in complete for obs in package(at) if obs["t"] is not None
         }
-        prompt = {obs["geo_id_insee"] for obs in package(slot(now - timedelta(minutes=12)))}
 
+    known = {s.mf_id: s.offline_after_s for s in load_registry()} if REGISTRY_PATH.exists() else {}
     kept = [r for r in rows if r["Id_station"] in with_temperature]
     ids = make_station_ids((r["Id_station"], r["Nom_usuel"]) for r in kept)
-    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with REGISTRY_PATH.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f, lineterminator="\n")
-        writer.writerow(
-            ["station_id", "mf_id", "name", "territory", "latitude", "longitude", "offline_after_s"]
+    save_registry(
+        RegistryStation(
+            station_id=ids[r["Id_station"]],
+            mf_id=r["Id_station"],
+            name=r["Nom_usuel"].replace("_", " ").title(),
+            territory=TERRITORIES[territory_prefix(r["Id_station"])],
+            latitude=float(r["Latitude"]),
+            longitude=float(r["Longitude"]),
+            offline_after_s=known.get(r["Id_station"], OFFLINE_AFTER_S["hourly"]),
         )
-        for r in sorted(kept, key=lambda r: ids[r["Id_station"]]):
-            mf_id = r["Id_station"]
-            writer.writerow(
-                [
-                    ids[mf_id],
-                    mf_id,
-                    r["Nom_usuel"].replace("_", " ").title(),
-                    TERRITORIES[territory_prefix(mf_id)],
-                    r["Latitude"],
-                    r["Longitude"],
-                    OFFLINE_AFTER_S["prompt" if mf_id in prompt else "hourly_batch"],
-                ]
-            )
-    n_prompt = sum(1 for r in kept if r["Id_station"] in prompt)
+        for r in kept
+    )
+    new = sum(1 for r in kept if r["Id_station"] not in known)
     print(
         f"{len(rows)} stations listed, {len(kept)} with a temperature sensor kept "
-        f"({n_prompt} prompt, {len(kept) - n_prompt} in hourly batches)"
+        f"({new} new, hourly threshold until classify_cadence.py has seen them)"
     )
 
 

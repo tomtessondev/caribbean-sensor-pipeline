@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -12,7 +13,9 @@ from sensor_pipeline.registry import (
     TERRITORIES,
     load_registry,
     make_station_ids,
+    save_registry,
     seeded_stations,
+    with_observed_cadence,
 )
 from sensor_pipeline.stations import STATIONS
 
@@ -85,3 +88,21 @@ def test_meteofrance_source_seeds_the_registry_only() -> None:
 def test_unknown_source_is_refused() -> None:
     with pytest.raises(ValueError, match="STATION_SOURCE"):
         seeded_stations("aqicn")  # type: ignore[arg-type]  # deliberately outside the Literal
+
+
+def test_threshold_follows_the_observed_cadence() -> None:
+    registry = load_registry(REGISTRY_PATH)[:3]
+    every_6_min, on_the_hour, never_seen = (s.station_id for s in registry)
+
+    classified = with_observed_cadence(registry, {every_6_min: True, on_the_hour: False})
+
+    assert [s.offline_after_s for s in classified] == [6000, 10800, 10800]
+    assert [s.station_id for s in classified] == [every_6_min, on_the_hour, never_seen]
+
+
+def test_saving_the_registry_rewrites_it_identically(tmp_path: Path) -> None:
+    copy = tmp_path / "registry.csv"
+
+    save_registry(load_registry(REGISTRY_PATH), copy)
+
+    assert copy.read_text(encoding="utf-8") == REGISTRY_PATH.read_text(encoding="utf-8")
