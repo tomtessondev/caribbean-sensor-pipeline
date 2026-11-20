@@ -1,5 +1,5 @@
 """Command-line entry point:
-`sensor-pipeline migrate | provision-broker | simulate | bridge | ingest`."""
+`sensor-pipeline migrate | provision-broker | simulate | bridge | ingest | api`."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ from pathlib import Path
 
 import httpx
 import typer
+import uvicorn
 
+from sensor_pipeline.api import create_app
 from sensor_pipeline.bridge import POLL_S, Bridge, mqtt_sessions
 from sensor_pipeline.bridge import run as run_bridge
 from sensor_pipeline.config import Settings
@@ -60,10 +62,13 @@ def migrate_command(
     ingestor_password: str | None = typer.Option(
         None, envvar="INGESTOR_DB_PASSWORD", help="Enables the insert-only sensor_ingestor login"
     ),
+    site_password: str | None = typer.Option(
+        None, envvar="SITE_DB_PASSWORD", help="Enables the site_reader login (stations endpoint)"
+    ),
     source: StationSource = SOURCE_OPTION,
 ) -> None:
     """Create or upgrade the TimescaleDB schema and register the stations."""
-    applied = migrate(Settings().db_dsn, grafana_password, ingestor_password, source)
+    applied = migrate(Settings().db_dsn, grafana_password, ingestor_password, source, site_password)
     typer.echo(f"Applied {len(applied)} migration(s): {', '.join(applied) or 'none'}")
 
 
@@ -153,6 +158,16 @@ def ingest(
         )
     finally:
         store.close()
+
+
+@app.command()
+def api(
+    host: str = typer.Option("127.0.0.1", help="Interface to listen on"),
+    port: int = typer.Option(8000, help="Port to listen on"),
+) -> None:
+    """Serve the latest reading of each station (GET /v1/stations) until stopped. Connect
+    it as site_reader (SENSOR_DB_DSN), the role that can read that and nothing else."""
+    uvicorn.run(create_app(Settings().db_dsn), host=host, port=port, access_log=False)
 
 
 if __name__ == "__main__":

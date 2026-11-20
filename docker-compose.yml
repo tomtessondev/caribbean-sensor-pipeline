@@ -2,8 +2,9 @@
 # simulated ones, or Météo-France's real ones through the bridge) and Grafana.
 # `make up` (or `docker compose --profile simulated up`) runs the simulator,
 # `make up STATION_SOURCE=meteofrance` the bridge.
-# Grafana on http://localhost:3001 (admin / admin), database on localhost:5433, broker on
-# localhost:8883 (TLS, login required; the CA is in the broker-secrets volume).
+# Grafana on http://localhost:3001 (admin / admin), stations endpoint on
+# http://localhost:8010/v1/stations, database on localhost:5433, broker on localhost:8883
+# (TLS, login required; the CA is in the broker-secrets volume).
 
 x-app: &app
   build: .
@@ -20,6 +21,7 @@ x-app: &app
     STATION_SOURCE: ${STATION_SOURCE:-simulated}
     GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local}
     INGESTOR_DB_PASSWORD: ${INGESTOR_DB_PASSWORD:-ingestor-local}
+    SITE_DB_PASSWORD: ${SITE_DB_PASSWORD:-site-local}
   volumes:
     - broker-secrets:/broker:ro
 
@@ -119,6 +121,21 @@ services:
     depends_on:
       ingest:
         condition: service_healthy
+    restart: unless-stopped
+
+  # The latest reading of each station for the portfolio site's map, on
+  # http://localhost:8010/v1/stations. Reads one view as site_reader (migration 006).
+  api:
+    <<: *app
+    command: ["api", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      SENSOR_DB_DSN: postgresql://site_reader:${SITE_DB_PASSWORD:-site-local}@db:5432/sensors
+    volumes: []
+    ports:
+      - "8010:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   grafana:

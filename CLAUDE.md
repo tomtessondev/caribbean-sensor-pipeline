@@ -22,6 +22,9 @@ than feature count. Every change should be something a recruiter can read.
   - `meteofrance.py` (API client, OAuth2 token from `secrets/meteofrance_application_id`,
     never printed) and `bridge.py` (each slot read twice, one MQTT session per station).
     Tests replay `tests/fixtures/meteofrance/`; never call the real API in tests
+  - `api.py`: FastAPI, read-only `GET /v1/stations` + `/health` for the portfolio site,
+    DB role `site_reader` (select on view `station_latest` only, `sql/006`), CORS limited
+    to the site's origins; served by `sensor-pipeline api`
   - `ingest.py`: paho thread enqueues, main thread validates and batches; `db.py` writes
   - `sql/NNN_*.sql`: migrations applied in order by `sensor-pipeline migrate`
 - TimescaleDB (hypertable `telemetry`, continuous aggregate `telemetry_hourly`), Mosquitto
@@ -40,7 +43,8 @@ than feature count. Every change should be something a recruiter can read.
   ingestor uses DB role `sensor_ingestor` (insert-only) and must keep `on conflict do
   nothing` without a conflict target. `tests/test_security.py` attacks a real broker.
 - Docker Compose: provision, broker, db (host port 5433), migrate, ingest, simulator (profile
-  `simulated`) or bridge (profile `meteofrance`), Grafana (host port 3001, anonymous read-only)
+  `simulated`) or bridge (profile `meteofrance`), api (host port 8010), Grafana (host port 3001,
+  anonymous read-only)
 - `grafana/`: provisioned datasource (read-only role `grafana_reader`, password from
   `GRAFANA_DB_PASSWORD`), dashboards JSON, alert rules YAML. Every SQL query in them is
   executed by `tests/test_grafana.py`: keep them runnable after schema changes.

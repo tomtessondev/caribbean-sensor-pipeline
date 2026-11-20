@@ -31,6 +31,7 @@ embedded world I come from.
 | Message contract | JSON over MQTT, versioned, validated with pydantic | `src/sensor_pipeline/messages.py` |
 | Stations | Simulator: diurnal cycle, atmospheric tide, Saharan dust plumes, solar battery, faults | `src/sensor_pipeline/simulator.py`, `publisher.py` |
 | Real stations | Météo-France Package Observations API (OAuth2, httpx), a versioned registry of 80 stations, one MQTT session per station | `src/sensor_pipeline/meteofrance.py`, `bridge.py`, `registry.py`, `data/` |
+| Stations endpoint | FastAPI, read-only: the latest clean reading of each station for the portfolio site's map; its own database role, CORS limited to the site | `src/sensor_pipeline/api.py`, `sql/006_site_reader.sql` |
 | Firmware | ESP32, C++17, PlatformIO: PMS5003 frame decoder, store-and-forward ring buffer, esp-mqtt QoS 1; Unity tests on the host; golden message shared with the Python tests | `firmware/` |
 | Broker | Eclipse Mosquitto 2: TLS only, a login per client, per-station ACL | `docker/mosquitto.conf`, `docker/broker-entrypoint.sh` |
 | Security material | Local CA and broker certificate (cryptography, ECDSA P-256), random passwords, ACL; generated, never committed | `src/sensor_pipeline/provision.py` |
@@ -167,6 +168,27 @@ make integration    # tests against real Mosquitto and TimescaleDB (needs Docker
   `scripts/record_package.py` is replayed with respx, through a real broker and database
   in the integration test. The token is cached until a minute before it expires and a 401
   gets one new token and one retry.
+
+## The stations endpoint
+
+`GET /v1/stations` (on http://localhost:8010 with Docker Compose) feeds the live map of the
+portfolio site:
+
+```json
+{"generated_at": "2026-11-20T04:12:31Z",
+ "stations": [{"station_id": "gp-rai-01", "name": "Le Raizet Aero", "territory": "Guadeloupe",
+               "lat": 16.264, "lon": -61.516333, "ts": "2026-11-20T04:00:00Z",
+               "temperature_c": 24.6, "humidity_pct": 93.0, "pressure_hpa": 1015.2,
+               "pm10_ugm3": null, "status": "online"}]}
+```
+
+Every station is listed; `ts` and the values are those of its latest reading of the last
+24 hours, with flagged values set to null as in `telemetry_clean`; `status` is `offline`
+past the station's own threshold. It connects as `site_reader`, a role that can read the
+`station_latest` view and nothing else (password from `SITE_DB_PASSWORD`), answers GET
+only, allows browser calls from `https://antilles-data-pipeline.vercel.app` and
+`http://localhost:3000` only, and sends `Cache-Control: public, max-age=60`. `GET /health`
+checks the database.
 
 ## Roadmap
 
