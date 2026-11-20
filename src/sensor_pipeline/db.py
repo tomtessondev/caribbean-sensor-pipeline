@@ -39,10 +39,10 @@ def migrate(
     site_password: str | None = None,
 ) -> list[str]:
     """Apply the SQL files not applied yet, in name order, register the stations of
-    `source` (the simulated network or the registry of real stations) and let
-    the least-privileged roles log in when given a password: `grafana_reader` (read-only),
-    `sensor_ingestor` (insert-only) and `site_reader` (the public endpoint's one view).
-    Returns the files applied."""
+    `source` (the simulated network or the registry of real stations) as the only active
+    ones, and let the least-privileged roles log in when given a password:
+    `grafana_reader` (read-only), `sensor_ingestor` (insert-only) and `site_reader` (the
+    public endpoint's one view). Returns the files applied."""
     # Autocommit: TimescaleDB policies and continuous aggregates refuse explicit
     # transaction blocks.
     with psycopg.connect(dsn, autocommit=True) as conn:
@@ -83,6 +83,11 @@ def migrate(
                 [s.longitude for s in stations],
                 [s.offline_after_s for s in stations],
             ),
+        )
+        # The other source's stations keep their rows and history, out of every view.
+        conn.execute(
+            "update stations set active = (station_id = any(%s::text[]))",
+            ([s.station_id for s in stations],),
         )
         for role, password in (
             ("grafana_reader", grafana_password),

@@ -14,7 +14,7 @@
         "label": "Station",
         "type": "query",
         "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
-        "query": "select town as __text, station_id as __value from stations order by territory, town",
+        "query": "select town as __text, station_id as __value from stations where active order by territory, town",
         "multi": true,
         "includeAll": true,
         "current": { "text": "All", "value": "$__all" },
