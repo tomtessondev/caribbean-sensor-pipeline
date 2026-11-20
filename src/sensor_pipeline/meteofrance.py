@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 from sensor_pipeline.messages import Telemetry
 from sensor_pipeline.registry import RegistryStation
@@ -79,19 +79,30 @@ class MeteoFranceClient:
         self._expires_at = 0.0
 
     def package(self, at: datetime) -> list[Observation]:
-        """The readings of every Antilles station for the 6-minute slot `at` (UTC)."""
-        return [
-            Observation.model_validate(item)
-            for item in self.raw_package(at)
-            if str(item.get("geo_id_insee", ""))[:3] in DEPARTMENTS
-        ]
+        """The readings of every Antilles station for the 6-minute slot `at` (UTC). An
+        observation that does not parse is logged and skipped: one broken station must not
+        hide the others."""
+        observations = []
+        for item in self.raw_package(at):
+            if str(item.get("geo_id_insee", ""))[:3] not in DEPARTMENTS:
+                continue
+            try:
+                observations.append(Observation.model_validate(item))
+            except ValidationError as exc:
+                logger.warning(
+                    "Observation of %s at %s skipped: %s", item.get("geo_id_insee"), at, exc
+                )
+        return observations
 
     def raw_package(self, at: datetime) -> list[dict[str, Any]]:
-        """The package as returned: every station of France, every field."""
+        """The package as returned: every station of France, every field. Raises
+        ValueError when the body is not a list of observations (or not JSON)."""
         response = self._get(
             PACKAGE_URL, {"date": at.strftime("%Y-%m-%dT%H:%M:%SZ"), "format": "json"}
         )
-        items: list[dict[str, Any]] = response.json()
+        items: object = response.json()
+        if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+            raise ValueError(f"unexpected package shape for {at}: {str(items)[:200]}")
         return items
 
     def _get(self, url: str, params: dict[str, str]) -> httpx.Response:

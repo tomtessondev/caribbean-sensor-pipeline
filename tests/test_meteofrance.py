@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -165,3 +166,29 @@ def test_a_second_401_is_an_error_not_a_loop() -> None:
         client.package(SLOT)
     assert package_route.call_count == 2
     assert token_route.call_count == 2
+
+
+@respx.mock
+def test_invalid_observation_is_skipped_not_the_package(caplog: pytest.LogCaptureFixture) -> None:
+    respx.post(TOKEN_URL).mock(return_value=token("t"))
+    broken = {"geo_id_insee": "97209004", "validity_time": "not a date", "t": 300.0}
+    good = {"geo_id_insee": "97101015", "validity_time": "2026-11-20T03:48:00Z", "t": 300.15}
+    respx.get(PACKAGE_URL).mock(return_value=httpx.Response(200, json=[broken, good]))
+    client = MeteoFranceClient(httpx.Client(), APPLICATION_ID, FakeClock())
+
+    with caplog.at_level(logging.WARNING, logger="sensor_pipeline.meteofrance"):
+        observations = client.package(SLOT)
+
+    assert [o.station for o in observations] == ["97101015"]
+    assert any("97209004" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("body", [{"error": "maintenance"}, ["not an observation"]])
+@respx.mock
+def test_package_of_another_shape_is_a_value_error(body: object) -> None:
+    respx.post(TOKEN_URL).mock(return_value=token("t"))
+    respx.get(PACKAGE_URL).mock(return_value=httpx.Response(200, json=body))
+    client = MeteoFranceClient(httpx.Client(), APPLICATION_ID, FakeClock())
+
+    with pytest.raises(ValueError, match="package"):
+        client.package(SLOT)

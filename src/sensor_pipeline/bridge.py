@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 import httpx
+import paho.mqtt.client as mqtt
 from pydantic import ValidationError
 
 from sensor_pipeline.config import Settings
@@ -34,6 +36,11 @@ PASSES = (timedelta(minutes=10), timedelta(minutes=80))
 # Readings older than this are neither published nor remembered.
 WINDOW = timedelta(hours=3)
 POLL_S = 120.0
+# Total wait for the broker's acknowledgements at the end of a tick, all sessions together.
+ACK_TIMEOUT_S = 30.0
+# What a tick may raise without stopping the bridge: the API unreachable or answering
+# garbage (JSONDecodeError is a ValueError), the broker unreachable, paho refusing a message.
+TICK_ERRORS = (httpx.HTTPError, ValueError, OSError, RuntimeError)
 
 
 class Api(Protocol):
@@ -42,6 +49,7 @@ class Api(Protocol):
 
 class Session(Protocol):
     def publish(self, reading: Telemetry) -> None: ...
+    def wait_for_acks(self, deadline: float) -> None: ...
     def close(self) -> None: ...
 
 
@@ -67,6 +75,8 @@ class Bridge:
         self._sessions: dict[str, Session] = {}
         self._sent: dict[str, set[datetime]] = {}
         self._unknown: set[str] = set()
+        # Stations that published during the current tick, whose acks are awaited.
+        self._touched: set[str] = set()
         # (slot, pass) already read.
         self.fetched: set[tuple[datetime, int]] = set()
 
@@ -74,15 +84,24 @@ class Bridge:
         """Read the slots that are due and publish what is new. Returns readings published."""
         now = self._clock()
         published = 0
-        for index, delay in enumerate(PASSES):
-            at = slot(now - delay)
-            if (at, index) in self.fetched:
-                continue
-            for obs in self._api.package(at):
-                published += self._handle(obs, now)
-            self.fetched.add((at, index))
+        self._touched.clear()
+        try:
+            for index, delay in enumerate(PASSES):
+                at = slot(now - delay)
+                if (at, index) in self.fetched:
+                    continue
+                for obs in self._api.package(at):
+                    published += self._handle(obs, now)
+                self.fetched.add((at, index))
+        finally:
+            self._wait_for_acks()
         self._forget(now)
         return published
+
+    def _wait_for_acks(self) -> None:
+        deadline = time.monotonic() + ACK_TIMEOUT_S
+        for station_id in sorted(self._touched):
+            self._sessions[station_id].wait_for_acks(deadline)
 
     def close(self) -> None:
         for session in self._sessions.values():
@@ -110,6 +129,7 @@ class Bridge:
         if session is None:
             session = self._sessions[station.station_id] = self._open_session(station)
         session.publish(reading)
+        self._touched.add(station.station_id)
         sent.add(obs.validity_time)
         return 1
 
@@ -119,15 +139,51 @@ class Bridge:
         self.fetched = {(at, i) for at, i in self.fetched if at >= now - WINDOW}
 
 
-class MqttSession:
-    """A station's MQTT session; waits for the broker's acknowledgement of each reading."""
+class Publisher(Protocol):
+    """What a session needs from the MQTT client (StationClient)."""
 
-    def __init__(self, station: RegistryStation, settings: Settings, password: str | None):
-        self._client = StationClient(station.station_id, settings, password, client_prefix="mf")
+    def publish(self, topic: str, payload: str) -> mqtt.MQTTMessageInfo: ...
+    def close(self) -> None: ...
+
+
+class MqttSession:
+    """A station's MQTT session. Readings are queued at once; the broker's
+    acknowledgements are awaited together at the end of the tick. While the connection is
+    down paho keeps the messages (MQTT_ERR_NO_CONN) and sends them on reconnection."""
+
+    def __init__(self, client: Publisher, station: RegistryStation) -> None:
+        self._client = client
+        self._station_id = station.station_id
         self._topic = telemetry_topic(station.station_id)
+        self._pending: list[mqtt.MQTTMessageInfo] = []
+
+    @classmethod
+    def open(
+        cls, station: RegistryStation, settings: Settings, password: str | None
+    ) -> MqttSession:
+        return cls(
+            StationClient(station.station_id, settings, password, client_prefix="mf"), station
+        )
 
     def publish(self, reading: Telemetry) -> None:
-        self._client.publish(self._topic, reading.model_dump_json()).wait_for_publish(timeout=30)
+        self._pending.append(self._client.publish(self._topic, reading.model_dump_json()))
+
+    def wait_for_acks(self, deadline: float) -> None:
+        unacknowledged = 0
+        for info in self._pending:
+            try:
+                info.wait_for_publish(timeout=max(0.0, deadline - time.monotonic()))
+                acknowledged = info.is_published()
+            except (ValueError, RuntimeError):  # not connected: queued, not refused
+                acknowledged = False
+            unacknowledged += not acknowledged
+        self._pending.clear()
+        if unacknowledged:
+            logger.warning(
+                "%s: %d readings not acknowledged yet, kept for the next connection",
+                self._station_id,
+                unacknowledged,
+            )
 
     def close(self) -> None:
         self._client.close()
@@ -150,22 +206,22 @@ def mqtt_sessions(settings: Settings, registry: Sequence[RegistryStation] = ()) 
         )
 
     def open_session(station: RegistryStation) -> Session:
-        return MqttSession(station, settings, credentials.get(station.station_id))
+        return MqttSession.open(station, settings, credentials.get(station.station_id))
 
     return open_session
 
 
 def run(bridge: Bridge, stop: threading.Event, poll_s: float = POLL_S) -> None:
-    """Tick every `poll_s` seconds until `stop` is set. An unreachable or failing API is
-    logged and retried on the next tick; it never stops the bridge."""
+    """Tick every `poll_s` seconds until `stop` is set. A failing API or broker is logged
+    and retried on the next tick; it never stops the bridge."""
     try:
         while True:
             try:
                 published = bridge.tick()
                 if published:
                     logger.info("Published %d readings", published)
-            except httpx.HTTPError as exc:
-                logger.warning("Météo-France API failed, retrying next tick: %s", exc)
+            except TICK_ERRORS as exc:
+                logger.warning("Tick failed, retrying next tick: %r", exc)
             if stop.wait(poll_s):
                 break
     finally:

@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
+import paho.mqtt.client as mqtt
 import pytest
+from paho.mqtt.enums import CallbackAPIVersion
 
-from sensor_pipeline.bridge import Bridge, mqtt_sessions, run
+from sensor_pipeline.bridge import Bridge, MqttSession, mqtt_sessions, run
 from sensor_pipeline.config import Settings
 from sensor_pipeline.messages import Telemetry
 from sensor_pipeline.meteofrance import Observation
@@ -52,10 +55,14 @@ class FakeSession:
     def __init__(self, station: RegistryStation) -> None:
         self.station = station
         self.sent: list[Telemetry] = []
+        self.waits: list[float] = []
         self.closed = False
 
     def publish(self, reading: Telemetry) -> None:
         self.sent.append(reading)
+
+    def wait_for_acks(self, deadline: float) -> None:
+        self.waits.append(deadline)
 
     def close(self) -> None:
         self.closed = True
@@ -213,6 +220,99 @@ def test_run_survives_api_errors_and_closes_sessions() -> None:
 
     assert calls == 2
     assert sessions.opened[0].closed
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError("Expecting value: line 1 column 1 (char 0)"),
+        OSError("connection refused"),
+        RuntimeError("Message publish failed"),
+    ],
+)
+def test_run_survives_errors_other_than_http(error: Exception) -> None:
+    api, sessions = FakeApi(), Sessions()
+    api.fail = error
+    b = bridge(api, sessions)
+    stop = threading.Event()
+    calls = 0
+
+    def wait(_seconds: float) -> bool:
+        nonlocal calls
+        calls += 1
+        return calls >= 2
+
+    stop.wait = wait  # type: ignore[method-assign]  # a fake wait instead of real sleeping
+
+    run(b, stop, poll_s=120)
+
+    assert calls == 2
+
+
+def test_acks_are_awaited_once_per_tick_with_one_deadline() -> None:
+    api, sessions = FakeApi(), Sessions()
+    api.packages[FIRST_PASS] = [
+        obs(RAIZET.mf_id, FIRST_PASS),
+        obs(RAIZET.mf_id, FIRST_PASS - timedelta(minutes=6)),
+        obs(DESAIX.mf_id, FIRST_PASS),
+    ]
+
+    assert bridge(api, sessions).tick() == 3
+
+    waits = [s.waits for s in sessions.opened]
+    assert [len(w) for w in waits] == [1, 1]
+    assert waits[0] == waits[1]  # one shared deadline, not 30 s per session
+
+
+class OfflineClient:
+    """A paho client that never connected: QoS 1 messages are queued with
+    MQTT_ERR_NO_CONN, to be sent once a connection is made."""
+
+    def __init__(self) -> None:
+        self.client = mqtt.Client(CallbackAPIVersion.VERSION2)
+
+    def publish(self, topic: str, payload: str) -> mqtt.MQTTMessageInfo:
+        return self.client.publish(topic, payload, qos=1)
+
+    def close(self) -> None:
+        pass
+
+
+class SilentClient:
+    """Connected, but the broker never acknowledges anything."""
+
+    def publish(self, topic: str, payload: str) -> mqtt.MQTTMessageInfo:
+        info = mqtt.MQTTMessageInfo(1)
+        info.rc = mqtt.MQTT_ERR_SUCCESS
+        return info
+
+    def close(self) -> None:
+        pass
+
+
+def reading_of(station: RegistryStation) -> Telemetry:
+    return Telemetry(station_id=station.station_id, ts=FIRST_PASS, seq=1, temperature_c=27.0)
+
+
+def test_disconnected_session_queues_without_raising() -> None:
+    session = MqttSession(OfflineClient(), RAIZET)
+
+    session.publish(reading_of(RAIZET))
+    started = time.monotonic()
+    session.wait_for_acks(time.monotonic() + 5)
+
+    assert time.monotonic() - started < 1  # nothing to wait for while disconnected
+
+
+def test_unacknowledged_readings_share_the_deadline() -> None:
+    session = MqttSession(SilentClient(), RAIZET)
+    for _ in range(4):
+        session.publish(reading_of(RAIZET))
+
+    started = time.monotonic()
+    session.wait_for_acks(time.monotonic() + 0.4)
+
+    assert time.monotonic() - started < 1  # 0.4 s in all, not 0.4 s per reading
 
 
 def test_bridge_refuses_a_broker_provisioned_for_other_stations(tmp_path: Path) -> None:
