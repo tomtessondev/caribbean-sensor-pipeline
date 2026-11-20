@@ -16,10 +16,30 @@ than feature count. Every change should be something a recruiter can read.
     future ESP32 firmware must follow it; change it only with a new `v`.
   - `stations.py`, `simulator.py` (physics + faults, deterministic per seed),
     `publisher.py` (one MQTT session per station, last will)
+  - `registry.py` + `data/meteofrance_antilles.csv`: the real Météo-France stations
+    (built once by `scripts/build_registry.py`); `STATION_SOURCE=simulated|meteofrance`
+    picks what `migrate` seeds (and marks `active`, the other source's stations become
+    inactive, `sql/007`) and `provision-broker` creates logins for. Station ids are
+    permanent: the commune letters come from `registry.COMMUNES` (INSEE code -> one
+    unique code), simulator ids are skipped; never renumber a deployed station.
+    `offline_after_s` comes from observed cadence (`scripts/classify_cadence.py`, run on
+    a database with a few hours of real data): 6000 s for 6-minute stations, 10800 s
+    for hourly or never-seen ones
+  - `meteofrance.py` (API client, OAuth2 token from `secrets/meteofrance_application_id`,
+    never printed; invalid observations skipped one by one) and `bridge.py` (each slot
+    read twice, at +10 and +80 min, each pass catching up on missed slots up to 3 h
+    back; one MQTT session per station, acks awaited once per tick; a tick never stops
+    the bridge). Tests replay `tests/fixtures/meteofrance/`; never call the real API in
+    tests
+  - `api.py`: FastAPI, read-only `GET /v1/stations` + `/health` for the portfolio site,
+    DB role `site_reader` (select on view `station_latest` only, `sql/006`), CORS limited
+    to the site's origins, `Vary: Origin`, 3 s connect / 2 s statement timeouts, 503
+    when the database is unavailable; served by `sensor-pipeline api`
   - `ingest.py`: paho thread enqueues, main thread validates and batches; `db.py` writes
   - `sql/NNN_*.sql`: migrations applied in order by `sensor-pipeline migrate`
 - TimescaleDB (hypertable `telemetry`, continuous aggregate `telemetry_hourly`), Mosquitto
-- Data quality (`sql/003_data_quality.sql`): procedure `flag_readings` scheduled with
+- Data quality (`sql/003_data_quality.sql`, rules replaced by `sql/008`: temperature
+  5-40 °C for the mountain stations): procedure `flag_readings` scheduled with
   `add_job` every 5 min, writes `reading_flags`; never modify `telemetry` to correct data,
   add a rule instead. Dashboards read `telemetry_clean` for PM values.
 - `firmware/`: PlatformIO project for the ESP32 station. Logic in `lib/telemetry` (no
@@ -33,8 +53,9 @@ than feature count. Every change should be something a recruiter can read.
   `secrets/` is ignored). Broker is TLS-only on 8883 with ACL `antilles/%u/...`;
   ingestor uses DB role `sensor_ingestor` (insert-only) and must keep `on conflict do
   nothing` without a conflict target. `tests/test_security.py` attacks a real broker.
-- Docker Compose: provision, broker, db (host port 5433), migrate, ingest, simulator, Grafana (host
-  port 3001, anonymous read-only)
+- Docker Compose: provision, broker, db (host port 5433), migrate, ingest, simulator (profile
+  `simulated`) or bridge (profile `meteofrance`), api (host port 8010), Grafana (host port 3001,
+  anonymous read-only)
 - `grafana/`: provisioned datasource (read-only role `grafana_reader`, password from
   `GRAFANA_DB_PASSWORD`), dashboards JSON, alert rules YAML. Every SQL query in them is
   executed by `tests/test_grafana.py`: keep them runnable after schema changes.

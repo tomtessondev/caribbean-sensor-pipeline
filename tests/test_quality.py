@@ -14,6 +14,7 @@ from tests.support import query
 pytestmark = pytest.mark.integration
 
 STEP = timedelta(seconds=10)
+COLD = {50: 11.0, 70: 2.0}
 
 
 def run_rules(dsn: str) -> None:
@@ -71,6 +72,9 @@ def seeded(dsn: str) -> tuple[str, datetime]:
         add("mq-lam-01", i, 20.0 + i * 200 / 119 + (i % 3) * 0.2)
         # Sainte-Anne: one impossible temperature for a sea-level Caribbean town.
         add("mq-san-01", i, 15.0 + (i % 4) * 0.5, temperature=55.0 if i == 30 else 27.5)
+        # Le Moule standing in for a mountain station (Saint-Claude, 1100 m) on a winter
+        # night: 11 °C is real there, 2 °C is not.
+        add("gp-mou-01", i, 16.0 + (i % 4) * 0.5, temperature=COLD.get(i, 18.0))
 
     store = Store.connect(dsn)
     store.insert_readings(readings)
@@ -83,6 +87,7 @@ def test_each_rule_flags_exactly_its_readings(seeded: tuple[str, datetime]) -> N
     dsn, _ = seeded
     assert flags(dsn) == [
         ("gp-bte-01", "pm_spike", 1),  # two days old, but received in the lookback
+        ("gp-mou-01", "implausible_weather", 1),  # 2 °C, not 11 °C
         ("gp-pap-01", "pm_spike", 1),
         ("mq-fdf-01", "pm_stuck", 40),
         ("mq-san-01", "implausible_weather", 1),

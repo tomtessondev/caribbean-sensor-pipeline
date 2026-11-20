@@ -36,6 +36,10 @@ def test_migrations_are_idempotent(dsn: str) -> None:
         "002_station_health.sql",
         "003_data_quality.sql",
         "004_ingestor_role.sql",
+        "005_station_cadence.sql",
+        "006_site_reader.sql",
+        "007_active_stations.sql",
+        "008_mountain_temperatures.sql",
     ]
     assert migrate(dsn) == []
     assert query(dsn, "select count(*) from stations") == [(6,)]

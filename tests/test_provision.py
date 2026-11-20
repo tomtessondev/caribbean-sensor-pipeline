@@ -5,10 +5,14 @@ import json
 import stat
 from pathlib import Path
 
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
+from typer.testing import CliRunner
 
+from sensor_pipeline.cli import app
 from sensor_pipeline.provision import INGESTOR_USER, load_credentials, provision_broker
+from sensor_pipeline.registry import REGISTRY_PATH, load_registry
 
 STATIONS = ["gp-pap-01", "mq-fdf-01"]
 
@@ -79,3 +83,14 @@ def test_extra_hostnames_and_lan_addresses_are_in_the_certificate(tmp_path: Path
 
     assert "mqtt.home" in names.get_values_for_type(x509.DNSName)
     assert ipaddress.ip_address("192.168.1.10") in names.get_values_for_type(x509.IPAddress)
+
+
+def test_provision_creates_logins_for_the_selected_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("STATION_SOURCE", "meteofrance")
+    result = CliRunner().invoke(app, ["provision-broker", "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    users = set(load_credentials(tmp_path / "credentials.json"))
+    assert users == {INGESTOR_USER, *(s.station_id for s in load_registry(REGISTRY_PATH))}

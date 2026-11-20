@@ -9,10 +9,15 @@ authors = [{ name = "Tom Tesson" }]
 dependencies = [
     # Local certificate authority for the broker's TLS (provision-broker).
     "cryptography>=43",
+    # Read-only stations endpoint for the portfolio site's live map.
+    "fastapi>=0.115",
+    # Météo-France API client (the bridge and the registry builder).
+    "httpx>=0.27",
     "paho-mqtt>=2.1",
     "psycopg[binary]>=3.2",
     "pydantic>=2.8",
     "typer>=0.12",
+    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +30,8 @@ dev = [
     "testcontainers>=4.8",
     # Tests read the Grafana provisioning files.
     "pyyaml>=6.0",
+    # Replays recorded Météo-France responses: tests never call the real API.
+    "respx>=0.21",
 ]
 # Builds and tests the ESP32 firmware in firmware/.
 firmware = [

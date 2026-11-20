@@ -1,6 +1,10 @@
-# The whole pipeline on a laptop: broker, database, migrations, ingestor, six stations and
-# Grafana. Grafana on http://localhost:3001 (admin / admin), database on localhost:5433,
-# broker on localhost:8883 (TLS, login required; the CA is in the broker-secrets volume).
+# The whole pipeline on a laptop: broker, database, migrations, ingestor, stations (six
+# simulated ones, or Météo-France's real ones through the bridge) and Grafana.
+# `make up` (or `docker compose --profile simulated up`) runs the simulator,
+# `make up STATION_SOURCE=meteofrance` the bridge.
+# Grafana on http://localhost:3001 (admin / admin), stations endpoint on
+# http://localhost:8010/v1/stations, database on localhost:5433, broker on localhost:8883
+# (TLS, login required; the CA is in the broker-secrets volume).
 
 x-app: &app
   build: .
@@ -11,8 +15,13 @@ x-app: &app
     MQTT_TLS_CA: /broker/ca.crt
     MQTT_CREDENTIALS_FILE: /broker/credentials.json
     SENSOR_DB_DSN: postgresql://sensors:sensors@db:5432/sensors
+    # simulated (the six simulated stations) or meteofrance (the real stations of
+    # src/sensor_pipeline/data/meteofrance_antilles.csv): what migrate registers and what
+    # provision creates broker logins for.
+    STATION_SOURCE: ${STATION_SOURCE:-simulated}
     GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local}
     INGESTOR_DB_PASSWORD: ${INGESTOR_DB_PASSWORD:-ingestor-local}
+    SITE_DB_PASSWORD: ${SITE_DB_PASSWORD:-site-local}
   volumes:
     - broker-secrets:/broker:ro
 
@@ -88,9 +97,45 @@ services:
   simulator:
     <<: *app
     command: ["simulate", "--backfill-hours", "48", "--interval", "10"]
+    profiles: ["simulated"]
     depends_on:
       ingest:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Real stations instead of the simulator: `make up STATION_SOURCE=meteofrance`. Needs
+  # the application id in secrets/meteofrance_application_id (never committed).
+  bridge:
+    <<: *app
+    command: ["bridge"]
+    profiles: ["meteofrance"]
+    environment:
+      MQTT_HOST: broker
+      MQTT_PORT: "8883"
+      MQTT_TLS_CA: /broker/ca.crt
+      MQTT_CREDENTIALS_FILE: /broker/credentials.json
+      METEOFRANCE_APPLICATION_ID_FILE: /run/secrets/meteofrance_application_id
+    volumes:
+      - broker-secrets:/broker:ro
+      - ./secrets/meteofrance_application_id:/run/secrets/meteofrance_application_id:ro
+    depends_on:
+      ingest:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The latest reading of each station for the portfolio site's map, on
+  # http://localhost:8010/v1/stations. Reads one view as site_reader (migration 006).
+  api:
+    <<: *app
+    command: ["api", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      SENSOR_DB_DSN: postgresql://site_reader:${SITE_DB_PASSWORD:-site-local}@db:5432/sensors
+    volumes: []
+    ports:
+      - "8010:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   grafana:
