@@ -71,8 +71,8 @@ Grafana on http://localhost:3001 (read-only without login; `admin` / `admin` to 
   the latest rejected messages.
 - **Alerts** (Alerting > Alert rules): *Saharan dust episode* (PM10 hourly mean above 50 for
   15 min), *Station offline* (no reading for longer than the station's own threshold: 5 min
-  for a simulated station, 30 or 100 min for a Météo-France one), *Particle sensor stuck* (same value
-  for 30 min). One alert instance per station.
+  for a simulated station, 100 min or 3 h for a Météo-France one), *Particle sensor stuck*
+  (same value for 30 min). One alert instance per station, active stations only.
 
 ```bash
 docker compose exec db psql -U sensors -c \
@@ -134,9 +134,11 @@ make integration    # tests against real Mosquitto and TimescaleDB (needs Docker
   *pm_stuck* (the same PM10 value 30 times in a row), *pm_spike* (more than 3 times the
   mean of the 30 surrounding readings, so a Saharan plume rising over hours is not
   flagged but an isolated glitch is) and *implausible_weather* (fine for the sensor,
-  impossible for a sea-level Caribbean town). Flags go to `reading_flags`; the raw table is
-  never modified; `telemetry_clean` hides only the suspect values (a stuck PM sensor does
-  not invalidate the temperature) and the air-quality charts read it.
+  impossible for a Caribbean station: temperature outside 5-40 °C, which leaves room for
+  the mountain stations' cold nights, humidity under 25 %, pressure outside 950-1040 hPa).
+  Flags go to `reading_flags`; the raw table is never modified; `telemetry_clean` hides
+  only the suspect values (a stuck PM sensor does not invalidate the temperature) and the
+  air-quality charts read it.
 - **Checked by arrival, not by timestamp.** The rules look at everything received recently,
   whatever its timestamp, so a station replaying an hour of buffered readings after an
   outage gets checked too.
@@ -149,21 +151,41 @@ make integration    # tests against real Mosquitto and TimescaleDB (needs Docker
 
 - **A registry, not a guess.** `src/sensor_pipeline/data/meteofrance_antilles.csv` lists
   the 80 stations of the four territories that report a temperature (of 96 listed), with
-  their Météo-France id, a contract id (`gp-rai-01`: territory from the INSEE commune code,
-  three letters from the commune, a counter) and their offline threshold. It was built
-  once from the API by `scripts/build_registry.py` and is reviewed like code.
-- **Two deliveries, two reads.** Every station measures every 6 minutes, but about half
-  publish each reading within minutes and the others send the past hour in one batch.
+  their Météo-France id, a contract id and their offline threshold. It was built once from
+  the API by `scripts/build_registry.py` and is reviewed like code.
+- **Ids that never change meaning.** A contract id (`gp-aby-02`, Le Raizet in Les Abymes)
+  is the territory, three letters for the commune and a counter. The letters come from a
+  hand-checked table keyed by the INSEE commune code (`registry.COMMUNES`), not from
+  station names, which spell one commune several ways: one commune has one code and no two
+  communes share one (La Désirade `des`, Deshaies `dsh`). Ids the simulator uses
+  (`mq-fdf-01`...) are skipped, so the two sources can never merge histories.
+- **Two deliveries, two reads, no gap.** Every station measures every 6 minutes, but about
+  half publish each reading within minutes and the others send the past hour in one batch.
   The bridge reads the package of each 6-minute slot 10 minutes after it and again 80
-  minutes after it, and publishes each reading once. `seq` is the number of 6-minute
-  slots since the epoch, so a missing reading shows as a gap, as for a device.
+  minutes after it, and publishes each reading once. Each read remembers its last slot:
+  after a laptop sleep or an API outage the next tick reads every slot it missed, up to
+  3 hours back. `seq` is the number of 6-minute slots since the epoch, so a missing
+  reading shows as a gap, as for a device.
+- **A bridge that keeps running.** An API error, a malformed package or a broker outage
+  is logged and retried on the next tick; an observation that does not parse is skipped
+  alone. Readings are queued on their session and acknowledgements awaited once per tick,
+  under one 30 s deadline; while the broker is away paho keeps them and resends them on
+  reconnection, and each session republishes its retained "online" on every connection.
 - **A station is a station.** Each one gets its own MQTT session, broker login and last
   will: the ACL, the ingestor, the quality rules and Grafana do not know the difference.
   Units follow the contract: temperature K to °C, humidity in %, sea-level pressure Pa to
   hPa (the station pressure of a 1141 m mountain station would fail the plausibility rule).
-- **Offline is per station.** `stations.offline_after_s` is 5 minutes for a simulated
-  station, 30 for a prompt Météo-France one and 100 for a batched one; the fleet table
-  and the *Station offline* alert use it.
+- **Offline is per station, from observed cadence.** `stations.offline_after_s` is
+  5 minutes for a simulated station. For a Météo-France one, `scripts/classify_cadence.py`
+  reads a few hours of real telemetry: a station with readings off the hour measures every
+  6 minutes and is offline after 100 minutes (its newest reading is at most about
+  90 minutes old when it arrives in a batch read 80 minutes late); one seen only on the
+  hour, or not yet, gets 3 hours. On 19 hours of data all 80 stations report every
+  6 minutes. The fleet table and the *Station offline* alert use the threshold.
+- **Only the active source.** A database that switched from the simulator to Météo-France
+  keeps the simulated stations and their history, but `migrate` marks them inactive
+  (`stations.active`): the map, the fleet views and the offline alert show the stations
+  of `STATION_SOURCE` only.
 - **The API is never called in tests.** A real package recorded by
   `scripts/record_package.py` is replayed with respx, through a real broker and database
   in the integration test. The token is cached until a minute before it expires and a 401
@@ -176,19 +198,21 @@ portfolio site:
 
 ```json
 {"generated_at": "2026-11-20T04:12:31Z",
- "stations": [{"station_id": "gp-rai-01", "name": "Le Raizet Aero", "territory": "Guadeloupe",
+ "stations": [{"station_id": "gp-aby-02", "name": "Le Raizet Aero", "territory": "Guadeloupe",
                "lat": 16.264, "lon": -61.516333, "ts": "2026-11-20T04:00:00Z",
                "temperature_c": 24.6, "humidity_pct": 93.0, "pressure_hpa": 1015.2,
                "pm10_ugm3": null, "status": "online"}]}
 ```
 
-Every station is listed; `ts` and the values are those of its latest reading of the last
-24 hours, with flagged values set to null as in `telemetry_clean`; `status` is `offline`
-past the station's own threshold. It connects as `site_reader`, a role that can read the
-`station_latest` view and nothing else (password from `SITE_DB_PASSWORD`), answers GET
+Every station of the active source is listed; `ts` and the values are those of its latest
+reading of the last 24 hours, with flagged values set to null as in `telemetry_clean`;
+`status` is `offline` past the station's own threshold. It connects as `site_reader`, a
+role that can read the `station_latest` view and nothing else (password from
+`SITE_DB_PASSWORD`), with a 3 s connect timeout and a 2 s statement timeout, answers GET
 only, allows browser calls from `https://antilles-data-pipeline.vercel.app` and
-`http://localhost:3000` only, and sends `Cache-Control: public, max-age=60`. `GET /health`
-checks the database.
+`http://localhost:3000` only, and sends `Cache-Control: public, max-age=60` and
+`Vary: Origin`. `GET /health` checks the database; both answer 503 while it is
+unavailable. No OpenAPI description or docs page is published.
 
 ## Roadmap
 
