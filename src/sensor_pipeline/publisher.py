@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.properties import Properties
+from paho.mqtt.reasoncodes import ReasonCode
 
 from sensor_pipeline.config import Settings
 from sensor_pipeline.messages import status_topic, telemetry_topic
@@ -40,9 +42,22 @@ class StationClient:
             clean_session=True,
         )
         self._client.will_set(status_topic(station_id), "offline", qos=1, retain=True)
+        self._client.on_connect = self._announce_online
         self._client.connect(settings.mqtt_host, settings.mqtt_port, keepalive=30)
         self._client.loop_start()
-        self._client.publish(status_topic(station_id), "online", qos=1, retain=True)
+
+    def _announce_online(
+        self,
+        client: mqtt.Client,
+        _userdata: object,
+        _flags: mqtt.ConnectFlags,
+        reason_code: ReasonCode,
+        _properties: Properties | None,
+    ) -> None:
+        """On every connection, not only the first: after a drop the broker has published
+        the last will ("offline", retained), which only a new "online" replaces."""
+        if not reason_code.is_failure:
+            client.publish(status_topic(self.station_id), "online", qos=1, retain=True)
 
     def publish(self, topic: str, payload: str) -> mqtt.MQTTMessageInfo:
         return self._client.publish(topic, payload, qos=1)
