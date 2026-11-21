@@ -1,7 +1,7 @@
 {
   "uid": "air-quality",
   "title": "Air quality — Antilles",
-  "description": "Particulate matter and weather from the six sensor stations. PM10 is compared with the EU daily limit of 50 µg/m³; dust from the Sahara drives the peaks.",
+  "description": "Particulate matter from the official stations of Gwad'Air and Madininair (raw hourly means, not validated yet: LCSQA / INERIS real-time files) and weather from Météo-France, or both from the six simulated stations. PM10 is compared with the EU daily limit of 50 µg/m³; dust from the Sahara drives the peaks.",
   "tags": ["sensors", "air-quality"],
   "timezone": "America/Guadeloupe",
   "refresh": "30s",
@@ -11,10 +11,23 @@
     "list": [
       {
         "name": "station",
-        "label": "Station",
+        "label": "Particle station",
+        "description": "Stations that measure particles: the official Gwad'Air and Madininair stations, or the simulated ones.",
         "type": "query",
         "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
-        "query": "select town as __text, station_id as __value from stations where active order by territory, town",
+        "query": "select town as __text, station_id as __value from stations where active and source <> 'meteofrance' order by territory, town",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 1
+      },
+      {
+        "name": "weather",
+        "label": "Weather station",
+        "description": "Stations that measure the weather: Météo-France's, or the simulated ones.",
+        "type": "query",
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
+        "query": "select town as __text, station_id as __value from stations where active and source <> 'airquality' order by territory, town",
         "multi": true,
         "includeAll": true,
         "current": { "text": "All", "value": "$__all" },
@@ -58,8 +71,8 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Stations above the EU PM10 limit (last hour)",
-      "description": "Stations whose PM10 mean over the last hour exceeds 50 µg/m³: the signature of a Saharan dust episode when several stations go up together.",
+      "title": "Stations above the EU PM10 limit (24 h mean)",
+      "description": "Stations whose validated PM10 mean over the last 24 hours exceeds the EU daily limit of 50 µg/m³: the signature of a Saharan dust episode when several stations go up together.",
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
       "targets": [
@@ -68,7 +81,7 @@
           "format": "table",
           "editorMode": "code",
           "rawQuery": true,
-          "rawSql": "select count(*) as stations from (select station_id from telemetry where ts > now() - interval '1 hour' group by station_id having avg(pm10_ugm3) > 50) above"
+          "rawSql": "select count(*) as stations from (select station_id from telemetry_clean where ts > now() - interval '24 hours' and station_id in ($station) group by station_id having avg(pm10_ugm3) > 50) above"
         }
       ],
       "fieldConfig": {
@@ -260,7 +273,7 @@
           "format": "time_series",
           "editorMode": "code",
           "rawQuery": true,
-          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.temperature_c) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
+          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.temperature_c) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($weather)\ngroup by 1, 2 order by 1"
         }
       ],
       "fieldConfig": {
@@ -281,7 +294,7 @@
           "format": "time_series",
           "editorMode": "code",
           "rawQuery": true,
-          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.humidity_pct) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
+          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.humidity_pct) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($weather)\ngroup by 1, 2 order by 1"
         }
       ],
       "fieldConfig": {
@@ -303,7 +316,7 @@
           "format": "time_series",
           "editorMode": "code",
           "rawQuery": true,
-          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.pressure_hpa) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($station)\ngroup by 1, 2 order by 1"
+          "rawSql": "select time_bucket('$__interval', t.ts) as time, s.town as metric, avg(t.pressure_hpa) as value\nfrom telemetry t join stations s using (station_id)\nwhere $__timeFilter(t.ts) and t.station_id in ($weather)\ngroup by 1, 2 order by 1"
         }
       ],
       "fieldConfig": {

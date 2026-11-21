@@ -4,6 +4,7 @@ the offline alert."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -16,6 +17,7 @@ from sensor_pipeline.messages import Telemetry
 from sensor_pipeline.registry import load_air_quality_registry, load_registry
 from sensor_pipeline.stations import STATIONS
 from tests.support import query
+from tests.test_grafana import GRAFANA
 
 pytestmark = pytest.mark.integration
 
@@ -66,3 +68,20 @@ def test_real_source_serves_both_registries_with_their_source(dsn: str) -> None:
     assert query(dsn, "select source from stations where station_id = 'gp-pap-02'") == [
         ("airquality",)
     ]
+
+
+def dashboard_variable(name: str) -> str:
+    board = json.loads((GRAFANA / "dashboards" / "air-quality.json").read_text(encoding="utf-8"))
+    return next(v["query"] for v in board["templating"]["list"] if v["name"] == name)
+
+
+def test_air_quality_dashboard_splits_particle_and_weather_stations(dsn: str) -> None:
+    """With the real sources, the particle panels list the air-quality stations and the
+    weather panels the Météo-France ones; the simulated stations measure both."""
+    migrate(dsn, source="real")
+    assert {r[1] for r in query(dsn, dashboard_variable("station"))} == AIR_QUALITY
+    assert {r[1] for r in query(dsn, dashboard_variable("weather"))} == REAL
+
+    migrate(dsn, source="simulated")
+    assert {r[1] for r in query(dsn, dashboard_variable("station"))} == SIMULATED
+    assert {r[1] for r in query(dsn, dashboard_variable("weather"))} == SIMULATED
