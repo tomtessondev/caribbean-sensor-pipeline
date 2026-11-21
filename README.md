@@ -89,6 +89,10 @@ make check          # ruff, mypy, unit tests
 make integration    # tests against real Mosquitto and TimescaleDB (needs Docker)
 ```
 
+Production: `docker-compose.vps.yml` runs the Météo-France stack on a VPS with Coolify
+(no host port, generated passwords, a memory limit per container); see
+[docs/deploy-vps.md](docs/deploy-vps.md).
+
 ## Design choices
 
 - **A versioned contract.** Firmware in the field cannot be updated in lockstep with the

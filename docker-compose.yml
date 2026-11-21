@@ -147,13 +147,13 @@ services:
       # Local demo: dashboards readable without logging in; editing still needs admin.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/air-quality.json
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/air-quality.json
     ports:
       # 3000 is often taken by a JavaScript dev server.
       - "3001:3000"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     depends_on:
       migrate:

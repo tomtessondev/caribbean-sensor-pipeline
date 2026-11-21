@@ -1,0 +1,207 @@
+# Production stack for a Coolify "Docker Compose" application on a small VPS: the real
+# Météo-France stations through the bridge, no simulator. See docs/deploy-vps.md.
+#
+# - No host port: Coolify's Traefik reaches grafana (3000) and api (8000) over its own
+#   network; the broker and the database stay internal.
+# - No secret in this file: Coolify generates every SERVICE_PASSWORD_* on the first deploy
+#   and keeps it; METEOFRANCE_APPLICATION_ID is entered in Coolify's UI.
+# - No host file: the broker and Grafana images bake their configuration in
+#   (docker/*.Dockerfile), state lives in named volumes.
+# - About 1 GB of memory in total (limits below).
+
+services:
+  # Generates the CA, the broker certificate, one password per station and the ACL on the
+  # first start; later starts keep them.
+  provision:
+    build: .
+    image: caribbean-sensor-pipeline:vps
+    command: ["provision-broker", "--out", "/broker"]
+    environment:
+      STATION_SOURCE: meteofrance
+    volumes:
+      - broker-secrets:/broker
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    restart: "no"
+
+  broker:
+    build:
+      context: .
+      dockerfile: docker/broker.Dockerfile
+    volumes:
+      - broker-secrets:/broker:ro
+      - broker-data:/mosquitto/data
+    depends_on:
+      provision:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8883"]
+      interval: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    restart: unless-stopped
+
+  db:
+    image: timescale/timescaledb:2.22.1-pg17
+    environment:
+      POSTGRES_USER: sensors
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+      POSTGRES_DB: sensors
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sensors -d sensors"]
+      interval: 5s
+      retries: 24
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+    restart: unless-stopped
+
+  # Applies the schema, registers the Météo-France stations and sets the passwords of the
+  # three least-privileged roles (on every deploy, so they always match Coolify's).
+  migrate:
+    build: .
+    image: caribbean-sensor-pipeline:vps
+    command: ["migrate"]
+    environment:
+      SENSOR_DB_DSN: postgresql://sensors:${SERVICE_PASSWORD_POSTGRES}@db:5432/sensors
+      STATION_SOURCE: meteofrance
+      GRAFANA_DB_PASSWORD: ${SERVICE_PASSWORD_GRAFANADB}
+      INGESTOR_DB_PASSWORD: ${SERVICE_PASSWORD_INGESTOR}
+      SITE_DB_PASSWORD: ${SERVICE_PASSWORD_SITEREADER}
+    depends_on:
+      provision:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    restart: "no"
+
+  ingest:
+    build: .
+    image: caribbean-sensor-pipeline:vps
+    command: ["ingest", "--ready-file", "/tmp/ingest-ready"]
+    environment:
+      MQTT_HOST: broker
+      MQTT_PORT: "8883"
+      MQTT_TLS_CA: /broker/ca.crt
+      MQTT_USERNAME: ingestor
+      MQTT_CREDENTIALS_FILE: /broker/credentials.json
+      # Insert-only database role (migration 004), not the owner.
+      SENSOR_DB_DSN: postgresql://sensor_ingestor:${SERVICE_PASSWORD_INGESTOR}@db:5432/sensors
+    volumes:
+      - broker-secrets:/broker:ro
+    depends_on:
+      broker:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ingest-ready"]
+      interval: 5s
+      retries: 24
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    restart: unless-stopped
+
+  bridge:
+    build: .
+    image: caribbean-sensor-pipeline:vps
+    command: ["bridge"]
+    environment:
+      MQTT_HOST: broker
+      MQTT_PORT: "8883"
+      MQTT_TLS_CA: /broker/ca.crt
+      MQTT_CREDENTIALS_FILE: /broker/credentials.json
+      # Entered in Coolify's UI; the bridge exits with a clear message when it is empty.
+      METEOFRANCE_APPLICATION_ID: ${METEOFRANCE_APPLICATION_ID}
+    volumes:
+      - broker-secrets:/broker:ro
+    depends_on:
+      ingest:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    restart: unless-stopped
+
+  # GET /v1/stations for the portfolio site's map, routed by Coolify to
+  # https://capteurs.horizon-studio.dev/v1 (prefix kept). Reads one view as site_reader.
+  api:
+    build: .
+    image: caribbean-sensor-pipeline:vps
+    command: ["api", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      SENSOR_DB_DSN: postgresql://site_reader:${SERVICE_PASSWORD_SITEREADER}@db:5432/sensors
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 15s
+      retries: 4
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    restart: unless-stopped
+
+  # Dashboards readable without logging in; editing needs the admin login.
+  grafana:
+    build:
+      context: .
+      dockerfile: docker/grafana.Dockerfile
+    environment:
+      GRAFANA_DB_PASSWORD: ${SERVICE_PASSWORD_GRAFANADB}
+      GF_SECURITY_ADMIN_USER: admin
+      # Read on the first start only (it initialises grafana-data).
+      GF_SECURITY_ADMIN_PASSWORD: ${SERVICE_PASSWORD_GRAFANAADMIN}
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SERVER_ROOT_URL: https://capteurs.horizon-studio.dev
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/air-quality.json
+    expose:
+      - "3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      retries: 8
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+    restart: unless-stopped
+
+volumes:
+  broker-secrets:
+  broker-data:
+  db-data:
+  grafana-data:

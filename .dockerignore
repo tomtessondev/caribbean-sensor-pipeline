@@ -1,0 +1,11 @@
+# Keep secrets and local state out of every build context.
+secrets/
+.git/
+.venv/
+.gstack/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+firmware/.pio/
