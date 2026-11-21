@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import io
+import itertools
 import logging
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -37,6 +38,7 @@ ORGANISMS = {
     "GWAD'AIR": ZoneInfo("America/Guadeloupe"),
     "MADININAIR": ZoneInfo("America/Martinique"),
 }
+ORGANISM_BYTES = tuple(f'"{o}"'.encode() for o in ORGANISMS)
 # The local day of the files read: both territories share it.
 LOCAL_TIME = ZoneInfo("America/Guadeloupe")
 Pollutant = Literal["PM10", "PM2.5"]
@@ -78,7 +80,12 @@ def parse_day_file(content: bytes) -> list[HourlyMean]:
     """The valid particle means of the Antilles networks in a day file. Valid means code
     qualité A, validité 1 and a value. A row that does not parse is logged and skipped;
     a file without the expected columns raises ValueError."""
-    reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")), delimiter=";")
+    lines = io.BytesIO(content)
+    header = lines.readline().decode("utf-8-sig")
+    # Only the Antilles rows are decoded: the whole file as text would take several times
+    # its 12 MB, too much for the bridge's memory limit.
+    antilles = (line.decode("utf-8") for line in lines if any(o in line for o in ORGANISM_BYTES))
+    reader = csv.DictReader(itertools.chain([header], antilles), delimiter=";")
     missing = [c for c in COLUMNS if c not in (reader.fieldnames or ())]
     if missing:
         raise ValueError(f"air-quality file without the columns {missing}")
