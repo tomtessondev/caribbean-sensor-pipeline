@@ -125,6 +125,26 @@ redeploy, nothing to do by hand:
   too: `docker compose up -d --force-recreate broker`; otherwise the bridge's particle
   sessions are refused and logged as not acknowledged.
 - `migrate` applies `009_station_source.sql` (the `source` column, PM2.5 and `source` in
-  `station_latest`) and registers the 12 new stations as active.
+  `station_latest`) and `010_hourly_quality.sql` (the spike rule waits for three later
+  readings, lookback 12 h), and registers the 12 new stations as active.
 - The bridge refuses to start if a station has no login, with a message naming the
   `STATION_SOURCE` to provision with.
+
+After the redeploy, check the bridge for refused sessions (on the VPS, with the resource
+uuid shown in Coolify):
+
+```bash
+docker logs --since 30m "$(docker ps -qf name=^bridge-<resource uuid>)" 2>&1 | grep "not acknowledged"
+```
+
+No output is the expected result: every reading reached the broker. Lines naming
+`gp-aby-03`, `mq-fdf-06` or another particle station mean the broker still runs with
+the logins it had before the redeploy (its container was not recreated). Restart it,
+the one command to get approved before running it:
+
+```bash
+docker restart "$(docker ps -qf name=^broker-<resource uuid>)"
+```
+
+The broker re-reads `passwords` when it starts; the bridge's sessions reconnect on their
+own and send the readings they kept.
