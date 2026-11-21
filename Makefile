@@ -18,14 +18,15 @@ integration:
 
 check: lint typecheck test
 
-# simulated (six simulated stations) or meteofrance (the real stations, via the bridge).
+# simulated (six simulated stations), meteofrance (the Météo-France stations, via the
+# bridge) or real (Météo-France and the official air-quality stations, via the bridge).
 STATION_SOURCE ?= simulated
 
 up:
 	STATION_SOURCE=$(STATION_SOURCE) docker compose --profile $(STATION_SOURCE) up -d --build
 
 down:
-	docker compose --profile simulated --profile meteofrance down
+	docker compose --profile simulated --profile meteofrance --profile real down
 
 logs:
 	docker compose logs -f ingest simulator bridge

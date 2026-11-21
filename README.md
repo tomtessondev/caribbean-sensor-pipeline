@@ -4,8 +4,10 @@ An IoT data pipeline for air-quality sensor stations in **Guadeloupe and Martini
 devices publish over **MQTT**, an ingestion service validates and batches the readings into
 **TimescaleDB**, and **Grafana** shows air quality and fleet health and raises alerts, all
 provisioned as code. The stations are either six simulated ones (realistic physics and
-faults) or the 80 real automatic weather stations of **Météo-France** in Guadeloupe,
-Martinique, Saint-Barthélemy and Saint-Martin, bridged from its API; an
+faults) or real ones: the 80 automatic weather stations of **Météo-France** in Guadeloupe,
+Martinique, Saint-Barthélemy and Saint-Martin, bridged from its API, and the 12 official
+**PM10 / PM2.5** stations of Gwad'Air and Madininair, bridged from the LCSQA / INERIS
+real-time files; an
 [ESP32 firmware](firmware/) (BME280 + PMS5003) speaks the same contract, tested on the host
 and built in CI.
 
@@ -31,6 +33,7 @@ embedded world I come from.
 | Message contract | JSON over MQTT, versioned, validated with pydantic | `src/sensor_pipeline/messages.py` |
 | Stations | Simulator: diurnal cycle, atmospheric tide, Saharan dust plumes, solar battery, faults | `src/sensor_pipeline/simulator.py`, `publisher.py` |
 | Real stations | Météo-France Package Observations API (OAuth2, httpx), a versioned registry of 80 stations, one MQTT session per station | `src/sensor_pipeline/meteofrance.py`, `bridge.py`, `registry.py`, `data/` |
+| Official air quality | LCSQA / INERIS real-time CSV files on data.gouv.fr (If-Modified-Since, local time to UTC), 12 particle stations | `src/sensor_pipeline/airquality.py`, `bridge.py`, `data/air_quality_antilles.csv` |
 | Stations endpoint | FastAPI, read-only: the latest clean reading of each station for the portfolio site's map; its own database role, CORS limited to the site | `src/sensor_pipeline/api.py`, `sql/006_site_reader.sql` |
 | Firmware | ESP32, C++17, PlatformIO: PMS5003 frame decoder, store-and-forward ring buffer, esp-mqtt QoS 1; Unity tests on the host; golden message shared with the Python tests | `firmware/` |
 | Broker | Eclipse Mosquitto 2: TLS only, a login per client, per-station ACL | `docker/mosquitto.conf`, `docker/broker-entrypoint.sh` |
@@ -57,6 +60,12 @@ make up STATION_SOURCE=meteofrance  # registers the 80 stations, one broker logi
 docker compose logs -f bridge       # "Published 47 readings"
 ```
 
+`make up STATION_SOURCE=real` adds the 12 official particle stations (the deployed stack):
+the bridge then also reads the air-quality files every 15 minutes. Switching from
+`meteofrance` to `real` on an existing stack works without removing anything: `provision`
+adds the new broker logins and `migrate` registers the new stations, but the broker reads
+its logins when it starts, so recreate it (`docker compose up -d --force-recreate broker`).
+
 The broker listens on `localhost:8883`, TLS only, with a login. On the first start the
 `provision` service writes the CA, the broker certificate, one password per station and the
 ACL to the `broker-secrets` volume; later starts keep them. To reach the broker from your
@@ -64,14 +73,18 @@ machine, copy `ca.crt` and `credentials.json` out of that volume.
 
 Grafana on http://localhost:3001 (read-only without login; `admin` / `admin` to edit):
 
-- **Air quality — Antilles**: stations online, stations above the EU PM10 limit, a map of
-  the latest PM10, PM10 against the 50 µg/m³ limit, PM2.5, temperature, humidity, pressure.
+- **Air quality — Antilles**: stations online, stations above the EU PM10 limit (24 h
+  mean), a map of the latest PM10, PM10 against the 50 µg/m³ limit, PM2.5 (particle
+  stations: the official ones or the simulated ones), temperature, humidity, pressure
+  (weather stations: Météo-France's or the simulated ones).
 - **Fleet health**: per-station status, minutes since the last reading, battery, radio
   signal, message loss and stuck-sensor flag; battery and RSSI over time, loss per hour,
   the latest rejected messages.
-- **Alerts** (Alerting > Alert rules): *Saharan dust episode* (PM10 hourly mean above 50 for
-  15 min), *Station offline* (no reading for longer than the station's own threshold: 5 min
-  for a simulated station, 100 min or 3 h for a Météo-France one), *Particle sensor stuck*
+- **Alerts** (Alerting > Alert rules): *Saharan dust episode* (PM10 mean of the last
+  3 hours above 50 for 15 min: the official hourly means arrive up to 2.5 h late),
+  *Station offline* (no reading for longer than the station's own threshold: 5 min for a
+  simulated station, 100 min or 3 h for a Météo-France one, 4 h for an official particle
+  station), *Particle sensor stuck*
   (same value for 30 min). One alert instance per station, active stations only.
 
 ```bash
@@ -89,7 +102,8 @@ make check          # ruff, mypy, unit tests
 make integration    # tests against real Mosquitto and TimescaleDB (needs Docker)
 ```
 
-Production: `docker-compose.vps.yml` runs the Météo-France stack on a VPS with Coolify
+Production: `docker-compose.vps.yml` runs the real stations (`STATION_SOURCE=real`:
+Météo-France and the official particle stations) on a VPS with Coolify
 (no host port, generated passwords, a memory limit per container); see
 [docs/deploy-vps.md](docs/deploy-vps.md).
 
@@ -195,6 +209,43 @@ Production: `docker-compose.vps.yml` runs the Météo-France stack on a VPS with
   in the integration test. The token is cached until a minute before it expires and a 401
   gets one new token and one retry.
 
+## Real particles: the official air-quality files
+
+The Météo-France stations measure the weather, not particles. The official PM10 and PM2.5
+of the Antilles come from the networks approved for air-quality monitoring, Gwad'Air
+(Guadeloupe, Saint-Martin) and Madininair (Martinique), through the real-time files that
+LCSQA / INERIS publish on data.gouv.fr. The bridge runs a second poller for them, next to
+the Météo-France one (`STATION_SOURCE=real`).
+
+- **One file per local day for all of France** (about 12 MB, 47 000 rows), rewritten every
+  hour, and the files of the previous days rewritten too while late values arrive. The
+  poller reads the current and the previous local day every 15 minutes with
+  `If-Modified-Since`, so an unchanged file costs a 304; the date of a file is kept only
+  once its readings went out, so a broker outage does not lose them until the next
+  rewrite. Only the Antilles rows are decoded: the whole file as text would not fit the
+  bridge's memory limit.
+- **Local time, not UTC.** The timestamps are the territory's local time (UTC−4, no
+  daylight saving), even though the companion XML says `+00:00`; this was checked against
+  Gwad'Air's own service in true UTC. 21:00 in Pointe-à-Pitre becomes 01:00 UTC the next
+  day.
+- **One reading per station and hour.** PM10 and PM2.5 of the same hour are merged into
+  one message (the other contract fields stay empty), `ts` is the start of the hour and
+  `seq` the number of hours since the epoch. Only rows marked valid (`code qualité` A,
+  `validité` 1) with a value are kept; the unit is spelled `µg-m3` or `µg/m3`, anything
+  else is logged and skipped.
+- **A 72-hour memory.** Values arrive up to 2.5 hours late and files are rewritten for
+  three days, so what was sent is remembered for 72 hours and nothing older is published.
+- **Raw values.** They are hourly means not validated yet by the networks (`moyenne
+  horaire brute`): the quality rules of this pipeline still apply to them.
+- **Same ids, same contract.** The 12 stations are in
+  `src/sensor_pipeline/data/air_quality_antilles.csv` with ids from the same commune table,
+  continuing its counters (Les Abymes has `gp-aby-01` and `-02` from Météo-France, its
+  particle station is `gp-aby-03`); each has its own broker login and MQTT session, and an
+  offline threshold of 4 hours.
+
+Données temps réel non validées : LCSQA / INERIS (Géod'Air), produites par Gwad'Air et
+Madininair, data.gouv.fr, Licence Ouverte 2.0.
+
 ## The stations endpoint
 
 `GET /v1/stations` (on http://localhost:8010 with Docker Compose) feeds the live map of the
@@ -205,10 +256,12 @@ portfolio site:
  "stations": [{"station_id": "gp-aby-02", "name": "Le Raizet Aero", "territory": "Guadeloupe",
                "lat": 16.264, "lon": -61.516333, "ts": "2026-11-20T04:00:00Z",
                "temperature_c": 24.6, "humidity_pct": 93.0, "pressure_hpa": 1015.2,
-               "pm10_ugm3": null, "status": "online"}]}
+               "pm10_ugm3": null, "pm2_5_ugm3": null, "status": "online",
+               "source": "meteofrance"}]}
 ```
 
-Every station of the active source is listed; `ts` and the values are those of its latest
+Every station of the active source is listed, with where its readings come from
+(`source`: `meteofrance`, `airquality` or `simulated`); `ts` and the values are those of its latest
 reading of the last 24 hours, with flagged values set to null as in `telemetry_clean`;
 `status` is `offline` past the station's own threshold. It connects as `site_reader`, a
 role that can read the `station_latest` view and nothing else (password from
