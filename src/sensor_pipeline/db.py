@@ -39,7 +39,7 @@ def migrate(
     site_password: str | None = None,
 ) -> list[str]:
     """Apply the SQL files not applied yet, in name order, register the stations of
-    `source` (the simulated network or the registry of real stations) as the only active
+    `source` (the simulated network, or the registries of real stations) as the only active
     ones, and let the least-privileged roles log in when given a password:
     `grafana_reader` (read-only), `sensor_ingestor` (insert-only) and `site_reader` (the
     public endpoint's one view). Returns the files applied."""
@@ -67,13 +67,13 @@ def migrate(
         conn.execute(
             """
             insert into stations (station_id, town, territory, latitude, longitude,
-                                  offline_after_s)
+                                  offline_after_s, source)
             select * from unnest(%s::text[], %s::text[], %s::text[], %s::float8[],
-                                 %s::float8[], %s::int[])
+                                 %s::float8[], %s::int[], %s::text[])
             on conflict (station_id) do update set
                 town = excluded.town, territory = excluded.territory,
                 latitude = excluded.latitude, longitude = excluded.longitude,
-                offline_after_s = excluded.offline_after_s
+                offline_after_s = excluded.offline_after_s, source = excluded.source
             """,
             (
                 [s.station_id for s in stations],
@@ -82,6 +82,7 @@ def migrate(
                 [s.latitude for s in stations],
                 [s.longitude for s in stations],
                 [s.offline_after_s for s in stations],
+                [s.source for s in stations],
             ),
         )
         # The other source's stations keep their rows and history, out of every view.

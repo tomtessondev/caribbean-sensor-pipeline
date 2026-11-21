@@ -13,7 +13,7 @@ from psycopg.conninfo import make_conninfo
 from sensor_pipeline.api import create_app
 from sensor_pipeline.db import Store, migrate
 from sensor_pipeline.messages import Telemetry
-from sensor_pipeline.registry import load_registry
+from sensor_pipeline.registry import load_air_quality_registry, load_registry
 from sensor_pipeline.stations import STATIONS
 from tests.support import query
 
@@ -21,6 +21,7 @@ pytestmark = pytest.mark.integration
 
 SIMULATED = {s.station_id for s in STATIONS}
 REAL = {s.station_id for s in load_registry()}
+AIR_QUALITY = {s.station_id for s in load_air_quality_registry()}
 
 
 def test_only_the_active_source_is_served(dsn: str) -> None:
@@ -48,3 +49,20 @@ def test_switching_back_reactivates_the_stations(dsn: str) -> None:
 
     health = {row[0] for row in query(dsn, "select station_id from station_health")}
     assert health == SIMULATED
+
+
+def test_real_source_serves_both_registries_with_their_source(dsn: str) -> None:
+    migrate(dsn, source="real", site_password="site-test")
+
+    client = TestClient(create_app(make_conninfo(dsn, user="site_reader", password="site-test")))
+    served = {s["station_id"]: s["source"] for s in client.get("/v1/stations").json()["stations"]}
+    assert set(served) == REAL | AIR_QUALITY
+    assert {served[i] for i in REAL} == {"meteofrance"}
+    assert {served[i] for i in AIR_QUALITY} == {"airquality"}
+
+    migrate(dsn, source="meteofrance")
+    health = {row[0] for row in query(dsn, "select station_id from station_health")}
+    assert health == REAL  # the particle stations retired, not deleted
+    assert query(dsn, "select source from stations where station_id = 'gp-pap-02'") == [
+        ("airquality",)
+    ]

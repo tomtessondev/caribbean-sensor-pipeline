@@ -17,6 +17,8 @@ from psycopg.rows import TupleRow, class_row
 from pydantic import AwareDatetime, BaseModel
 from starlette.responses import Response as StarletteResponse
 
+from sensor_pipeline.registry import Origin
+
 SITE_ORIGINS = ("https://antilles-data-pipeline.vercel.app", "http://localhost:3000")
 CACHE_CONTROL = "public, max-age=60"
 # A database that does not answer must not hold the request (and a worker) for long.
@@ -43,7 +45,9 @@ class StationOut(BaseModel):
     humidity_pct: float | None
     pressure_hpa: float | None
     pm10_ugm3: float | None
+    pm2_5_ugm3: float | None
     status: Literal["online", "offline"]
+    source: Origin
 
 
 class StationsOut(BaseModel):
@@ -85,7 +89,7 @@ def create_app(dsn: str) -> FastAPI:
         with connect(dsn) as conn, conn.cursor(row_factory=class_row(StationOut)) as cur:
             cur.execute(
                 "select station_id, name, territory, lat, lon, ts, temperature_c,"
-                " humidity_pct, pressure_hpa, pm10_ugm3, status"
+                " humidity_pct, pressure_hpa, pm10_ugm3, pm2_5_ugm3, status, source"
                 " from station_latest order by territory, station_id"
             )
             rows = cur.fetchall()

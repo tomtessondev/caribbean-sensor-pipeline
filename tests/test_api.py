@@ -28,6 +28,8 @@ FIELDS = {
     "humidity_pct",
     "pressure_hpa",
     "pm10_ugm3",
+    "pm2_5_ugm3",
+    "source",
     "status",
 }
 
@@ -42,6 +44,7 @@ def reading(station: str, minutes_ago: float, pm10: float, temperature: float = 
         humidity_pct=70,
         pressure_hpa=1013,
         pm10_ugm3=pm10,
+        pm2_5_ugm3=round(pm10 / 2, 1),
         battery_v=3.9,
         rssi_dbm=-70,
     )
@@ -92,6 +95,7 @@ def test_latest_reading_per_station(client: TestClient) -> None:
     pap = by_id["gp-pap-01"]
     assert datetime.fromisoformat(pap["ts"]) == NOW - timedelta(minutes=1)
     assert pap["temperature_c"] == 28.5 and pap["pm10_ugm3"] == 22.0
+    assert pap["pm2_5_ugm3"] == 11.0 and pap["source"] == "simulated"
     assert pap["name"] == "Pointe-à-Pitre" and pap["territory"] == "Guadeloupe"
     assert (pap["lat"], pap["lon"]) == (16.2411, -61.5331)
     assert by_id["mq-fdf-01"]["pm10_ugm3"] is None  # flagged spike

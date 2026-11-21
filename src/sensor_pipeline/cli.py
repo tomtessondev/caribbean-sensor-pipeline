@@ -41,8 +41,9 @@ def main(verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logg
 SOURCE_OPTION = typer.Option(
     "simulated",
     envvar="STATION_SOURCE",
-    help="Station network: the six simulated stations, or the registry of real "
-    "Météo-France stations",
+    help="Station network: simulated (the six simulated stations), meteofrance (the "
+    "Météo-France weather stations) or real (Météo-France plus the official air-quality "
+    "stations)",
 )
 
 

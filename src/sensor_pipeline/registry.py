@@ -1,7 +1,8 @@
-"""The stations a deployment knows: the six simulated ones, or the registry of real
-Météo-France automatic weather stations (a versioned CSV built once by
-`scripts/build_registry.py`). `STATION_SOURCE` picks one; `migrate` seeds it into the
-`stations` table and `provision-broker` creates one broker login per station."""
+"""The stations a deployment knows: the six simulated ones, or the real ones: Météo-France's
+automatic weather stations (a versioned CSV built once by `scripts/build_registry.py`) and
+the particle stations of Gwad'Air and Madininair (`data/air_quality_antilles.csv`, written
+by hand). `STATION_SOURCE` picks the network; `migrate` seeds it into the `stations` table
+and `provision-broker` creates one broker login per station."""
 
 from __future__ import annotations
 
@@ -14,9 +15,14 @@ from typing import Literal
 
 from sensor_pipeline.stations import STATIONS
 
-StationSource = Literal["simulated", "meteofrance"]
+# simulated: the six simulated stations. meteofrance: the Météo-France weather stations.
+# real: Météo-France plus the official air-quality stations (the deployed stack).
+StationSource = Literal["simulated", "meteofrance", "real"]
+# Where a station's readings come from (stations.source, served by /v1/stations).
+Origin = Literal["simulated", "meteofrance", "airquality"]
 
 REGISTRY_PATH = Path(__file__).parent / "data" / "meteofrance_antilles.csv"
+AIR_QUALITY_PATH = Path(__file__).parent / "data" / "air_quality_antilles.csv"
 
 TERRITORIES = {
     "gp": "Guadeloupe",
@@ -35,6 +41,9 @@ SIMULATED_OFFLINE_AFTER_S = 300
 # seen only on the hour may be read on that second pass only, so its newest reading can be
 # 140 minutes old; it gets 3 hours, as does a station never seen yet.
 OFFLINE_AFTER_S = {"six_minutes": 6000, "hourly": 10800}
+# The particle stations publish hourly means about 1.5 h after the hour, 2.5 h at worst:
+# four hours of silence is an outage.
+AIR_QUALITY_OFFLINE_AFTER_S = 14400
 FIELDS = ("station_id", "mf_id", "name", "territory", "latitude", "longitude", "offline_after_s")
 
 
@@ -51,6 +60,20 @@ class RegistryStation:
 
 
 @dataclass(frozen=True)
+class AirQualityStation:
+    """A particle station of the LCSQA / INERIS real-time files (Gwad'Air, Madininair)."""
+
+    station_id: str
+    site_code: str  # `code site` in the files: FR37xxx Gwad'Air, FR39xxx Madininair
+    insee: str  # INSEE code of its commune, which gives the id's letters
+    name: str
+    territory: str
+    latitude: float
+    longitude: float
+    offline_after_s: int
+
+
+@dataclass(frozen=True)
 class SeededStation:
     """A row of the `stations` table."""
 
@@ -60,6 +83,7 @@ class SeededStation:
     latitude: float
     longitude: float
     offline_after_s: int
+    source: Origin
 
 
 def load_registry(path: Path = REGISTRY_PATH) -> list[RegistryStation]:
@@ -68,6 +92,23 @@ def load_registry(path: Path = REGISTRY_PATH) -> list[RegistryStation]:
             RegistryStation(
                 station_id=row["station_id"],
                 mf_id=row["mf_id"],
+                name=row["name"],
+                territory=row["territory"],
+                latitude=float(row["latitude"]),
+                longitude=float(row["longitude"]),
+                offline_after_s=int(row["offline_after_s"]),
+            )
+            for row in csv.DictReader(f)
+        ]
+
+
+def load_air_quality_registry(path: Path = AIR_QUALITY_PATH) -> list[AirQualityStation]:
+    with path.open(encoding="utf-8", newline="") as f:
+        return [
+            AirQualityStation(
+                station_id=row["station_id"],
+                site_code=row["site_code"],
+                insee=row["insee"],
                 name=row["name"],
                 territory=row["territory"],
                 latitude=float(row["latitude"]),
@@ -125,17 +166,40 @@ def seeded_stations(source: StationSource) -> list[SeededStation]:
                 s.latitude,
                 s.longitude,
                 SIMULATED_OFFLINE_AFTER_S,
+                "simulated",
             )
             for s in STATIONS
         ]
-    if source == "meteofrance":
-        return [
+    if source not in ("meteofrance", "real"):
+        raise ValueError(
+            f"unknown STATION_SOURCE {source!r}: expected simulated, meteofrance or real"
+        )
+    seeded = [
+        SeededStation(
+            s.station_id,
+            s.name,
+            s.territory,
+            s.latitude,
+            s.longitude,
+            s.offline_after_s,
+            "meteofrance",
+        )
+        for s in load_registry()
+    ]
+    if source == "real":
+        seeded += [
             SeededStation(
-                s.station_id, s.name, s.territory, s.latitude, s.longitude, s.offline_after_s
+                s.station_id,
+                s.name,
+                s.territory,
+                s.latitude,
+                s.longitude,
+                s.offline_after_s,
+                "airquality",
             )
-            for s in load_registry()
+            for s in load_air_quality_registry()
         ]
-    raise ValueError(f"unknown STATION_SOURCE {source!r}: expected simulated or meteofrance")
+    return seeded
 
 
 def territory_prefix(mf_id: str) -> str:
@@ -233,17 +297,32 @@ def make_station_ids(mf_ids: Iterable[str]) -> dict[str, str]:
     running in Météo-France id order so that the result does not depend on the input
     order. An id the simulator uses (mq-fdf-01...) is skipped: mixing the two sources must
     never merge two stations' histories."""
-    taken = {s.station_id for s in STATIONS}
+    return _assign_ids({mf_id: mf_id[:5] for mf_id in mf_ids}, {s.station_id for s in STATIONS})
+
+
+def make_air_quality_ids(communes: Mapping[str, str]) -> dict[str, str]:
+    """Map air-quality site codes to contract ids, from the INSEE code of each site's
+    commune, after the ids of the simulator and of the Météo-France registry: the commune
+    counters continue (Les Abymes has gp-aby-01 and -02 from Météo-France, its particle
+    station is gp-aby-03)."""
+    taken = {s.station_id for s in STATIONS} | {s.station_id for s in load_registry()}
+    return _assign_ids(communes, taken)
+
+
+def _assign_ids(communes: Mapping[str, str], taken: set[str]) -> dict[str, str]:
+    """`communes` maps a source's station key to its INSEE commune code; the counter of
+    each commune runs in key order and skips the ids in `taken`."""
     counters: dict[str, int] = defaultdict(int)
     ids = {}
-    for mf_id in sorted(mf_ids):
-        commune = COMMUNES.get(mf_id[:5])
+    for key in sorted(communes):
+        insee = communes[key]
+        commune = COMMUNES.get(insee)
         if commune is None:
-            raise ValueError(f"commune {mf_id[:5]} of station {mf_id} is not in COMMUNES")
-        stem = f"{territory_prefix(mf_id)}-{commune[0]}"
+            raise ValueError(f"commune {insee} of station {key} is not in COMMUNES")
+        stem = f"{territory_prefix(insee)}-{commune[0]}"
         station_id = stem
         while station_id == stem or station_id in taken:
             counters[stem] += 1
             station_id = f"{stem}-{counters[stem]:02d}"
-        ids[mf_id] = station_id
+        ids[key] = station_id
     return ids
