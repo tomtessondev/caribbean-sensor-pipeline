@@ -8,11 +8,15 @@ from pathlib import Path
 import pytest
 
 from sensor_pipeline.registry import (
+    AIR_QUALITY_OFFLINE_AFTER_S,
+    AIR_QUALITY_PATH,
     COMMUNES,
     OFFLINE_AFTER_S,
     REGISTRY_PATH,
     TERRITORIES,
+    load_air_quality_registry,
     load_registry,
+    make_air_quality_ids,
     make_station_ids,
     save_registry,
     seeded_stations,
@@ -131,3 +135,53 @@ def test_saving_the_registry_rewrites_it_identically(tmp_path: Path) -> None:
     save_registry(load_registry(REGISTRY_PATH), copy)
 
     assert copy.read_text(encoding="utf-8") == REGISTRY_PATH.read_text(encoding="utf-8")
+
+
+AIR_QUALITY = load_air_quality_registry(AIR_QUALITY_PATH)
+METEOFRANCE_IDS = {s.station_id for s in load_registry(REGISTRY_PATH)}
+
+
+def test_air_quality_registry_holds_the_twelve_particle_stations() -> None:
+    assert {s.site_code for s in AIR_QUALITY} == {
+        *(f"FR370{n}" for n in ("01", "06", "10", "40", "41", "95")),
+        *(f"FR390{n}" for n in ("08", "09", "11", "14", "15", "16")),
+    }
+    ids = [s.station_id for s in AIR_QUALITY]
+    assert all(ID_PATTERN.match(i) for i in ids), ids
+    assert len(set(ids)) == len(ids)
+    for station in AIR_QUALITY:
+        assert TERRITORIES[station.station_id[:2]] == station.territory, station
+        assert station.offline_after_s == AIR_QUALITY_OFFLINE_AFTER_S
+        assert 14 < station.latitude < 19 and -64 < station.longitude < -60, station
+
+
+def test_air_quality_ids_never_collide_with_another_source() -> None:
+    ids = {s.station_id for s in AIR_QUALITY}
+
+    assert not ids & SIMULATED_IDS
+    assert not ids & METEOFRANCE_IDS
+    # The committed ids are the ones make_air_quality_ids gives.
+    assert make_air_quality_ids({s.site_code: s.insee for s in AIR_QUALITY}) == {
+        s.site_code: s.station_id for s in AIR_QUALITY
+    }
+
+
+def test_air_quality_ids_continue_the_commune_counters() -> None:
+    """Pointe-à-Pitre's 01 is the simulator's, Les Abymes' 01 and 02 are Météo-France's."""
+    ids = make_air_quality_ids({"FR37006": "97120", "FR37040": "97101", "FR39008": "97229"})
+
+    assert ids == {"FR37006": "gp-pap-02", "FR37040": "gp-aby-03", "FR39008": "mq-sch-01"}
+
+
+def test_real_source_seeds_both_registries() -> None:
+    seeded = seeded_stations("real")
+
+    assert [s.station_id for s in seeded] == [
+        *(s.station_id for s in load_registry(REGISTRY_PATH)),
+        *(s.station_id for s in AIR_QUALITY),
+    ]
+    by_id = {s.station_id: s for s in seeded}
+    assert {by_id[i].source for i in METEOFRANCE_IDS} == {"meteofrance"}
+    assert {by_id[s.station_id].source for s in AIR_QUALITY} == {"airquality"}
+    assert {s.source for s in seeded_stations("simulated")} == {"simulated"}
+    assert {s.source for s in seeded_stations("meteofrance")} == {"meteofrance"}

@@ -13,17 +13,18 @@ groups:
         condition: B
         data:
           - refId: A
-            relativeTimeRange: { from: 3600, to: 0 }
+            relativeTimeRange: { from: 10800, to: 0 }
             datasourceUid: timescale
             model:
               refId: A
               format: table
               editorMode: code
               rawQuery: true
+              # 3 hours: the official stations publish hourly means up to 2.5 hours late.
               rawSql: >-
                 select s.town as station, avg(t.pm10_ugm3) as pm10
                 from telemetry t join stations s using (station_id)
-                where t.ts > now() - interval '1 hour'
+                where t.ts > now() - interval '3 hours'
                 group by s.town
           - refId: B
             datasourceUid: __expr__
@@ -40,7 +41,7 @@ groups:
         annotations:
           summary: "PM10 above the EU limit at {{ $labels.station }}"
           description: >-
-            PM10 has averaged {{ printf "%.0f" $values.A.Value }} µg/m³ over the last hour
+            PM10 has averaged {{ printf "%.0f" $values.A.Value }} µg/m³ over the last 3 hours
             (EU daily limit 50). Several stations at once means a Saharan dust plume.
 
       - uid: station-offline

@@ -1,5 +1,6 @@
 # Production stack for a Coolify "Docker Compose" application on a small VPS: the real
-# Météo-France stations through the bridge, no simulator. See docs/deploy-vps.md.
+# Météo-France weather stations and the official air-quality stations (STATION_SOURCE=real)
+# through the bridge, no simulator. See docs/deploy-vps.md.
 #
 # - No host port: Coolify's Traefik reaches grafana (3000) and api (8000) over its own
 #   network; the broker and the database stay internal.
@@ -17,7 +18,7 @@ services:
     image: caribbean-sensor-pipeline:vps
     command: ["provision-broker", "--out", "/broker"]
     environment:
-      STATION_SOURCE: meteofrance
+      STATION_SOURCE: real
     volumes:
       - broker-secrets:/broker
     deploy:
@@ -64,7 +65,7 @@ services:
           memory: 384M
     restart: unless-stopped
 
-  # Applies the schema, registers the Météo-France stations and sets the passwords of the
+  # Applies the schema, registers the real stations and sets the passwords of the
   # three least-privileged roles (on every deploy, so they always match Coolify's).
   migrate:
     build: .
@@ -72,7 +73,7 @@ services:
     command: ["migrate"]
     environment:
       SENSOR_DB_DSN: postgresql://sensors:${SERVICE_PASSWORD_POSTGRES}@db:5432/sensors
-      STATION_SOURCE: meteofrance
+      STATION_SOURCE: real
       GRAFANA_DB_PASSWORD: ${SERVICE_PASSWORD_GRAFANADB}
       INGESTOR_DB_PASSWORD: ${SERVICE_PASSWORD_INGESTOR}
       SITE_DB_PASSWORD: ${SERVICE_PASSWORD_SITEREADER}
@@ -127,6 +128,8 @@ services:
       MQTT_CREDENTIALS_FILE: /broker/credentials.json
       # Entered in Coolify's UI; the bridge exits with a clear message when it is empty.
       METEOFRANCE_APPLICATION_ID: ${METEOFRANCE_APPLICATION_ID}
+      # Météo-France every 2 minutes and the air-quality files every 15 minutes.
+      STATION_SOURCE: real
     volumes:
       - broker-secrets:/broker:ro
     depends_on:
@@ -136,6 +139,10 @@ services:
       resources:
         limits:
           memory: 128M
+    # Lets the tick in progress (a download of a few seconds, the wait for acks) end on
+    # `docker stop` instead of Docker's 10 s. A stuck one is killed: what was not
+    # acknowledged is sent again after the restart, and ingestion ignores duplicates.
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # GET /v1/stations for the portfolio site's map, routed by Coolify to

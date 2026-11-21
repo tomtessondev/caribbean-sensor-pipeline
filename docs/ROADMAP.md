@@ -21,4 +21,6 @@
    the simulator) and an offline threshold per station derived from its observed cadence;
    only the stations of the active source on the map, in the fleet views and in the
    alert; a read-only endpoint serving the latest reading of each station to the portfolio
-   site.
+   site. The official PM10 / PM2.5 of Gwad'Air and Madininair as a second real source
+   (LCSQA / INERIS real-time files, 12 stations, hourly), deployed with Météo-France
+   (`STATION_SOURCE=real`); the endpoint serves PM2.5 and each station's source.

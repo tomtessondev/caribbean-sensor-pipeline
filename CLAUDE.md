@@ -17,11 +17,16 @@ than feature count. Every change should be something a recruiter can read.
   - `stations.py`, `simulator.py` (physics + faults, deterministic per seed),
     `publisher.py` (one MQTT session per station, last will)
   - `registry.py` + `data/meteofrance_antilles.csv`: the real Météo-France stations
-    (built once by `scripts/build_registry.py`); `STATION_SOURCE=simulated|meteofrance`
-    picks what `migrate` seeds (and marks `active`, the other source's stations become
-    inactive, `sql/007`) and `provision-broker` creates logins for. Station ids are
+    (built once by `scripts/build_registry.py`), and `data/air_quality_antilles.csv`: the
+    12 official particle stations (Gwad'Air, Madininair; written by hand, ids checked by
+    `make_air_quality_ids`); `STATION_SOURCE=simulated|meteofrance|real` (real =
+    Météo-France + air quality, the deployed stack) picks what `migrate` seeds (and marks
+    `active`, the other stations become inactive, `sql/007`; `stations.source` says
+    simulated / meteofrance / airquality, `sql/009`), what `provision-broker` creates
+    logins for and what the bridge polls. Station ids are
     permanent: the commune letters come from `registry.COMMUNES` (INSEE code -> one
-    unique code), simulator ids are skipped; never renumber a deployed station.
+    unique code), simulator ids are skipped, air-quality counters continue after
+    Météo-France's; never renumber a deployed station.
     `offline_after_s` comes from observed cadence (`scripts/classify_cadence.py`, run on
     a database with a few hours of real data): 6000 s for 6-minute stations, 10800 s
     for hourly or never-seen ones
@@ -31,7 +36,18 @@ than feature count. Every change should be something a recruiter can read.
     back; one MQTT session per station, acks awaited once per tick; a tick never stops
     the bridge). Tests replay `tests/fixtures/meteofrance/`; never call the real API in
     tests
-  - `api.py`: FastAPI, read-only `GET /v1/stations` + `/health` for the portfolio site,
+  - `airquality.py` (LCSQA / INERIS real-time day files on data.gouv.fr, no key:
+    timestamps in the territory's local time, converted to UTC; A/1 rows only; PM10 and
+    PM2.5 merged per station and hour, `seq` = hours since the epoch; a PM10-only hour of
+    a station that reports PM2.5 is held up to 3 h for it) and
+    `bridge.AirQualityBridge` (current and previous local day every 15 min with
+    If-Modified-Since / If-None-Match, 304 when unchanged; 72 h "already sent" window).
+    `bridge.run_all` runs both pollers in threads; a crashed one stops the bridge. Tests replay
+    `tests/fixtures/airquality/` (a trimmed real file); never call data.gouv.fr in tests.
+    Attribution: « Données temps réel non validées : LCSQA / INERIS (Géod'Air), produites
+    par Gwad'Air et Madininair, data.gouv.fr, Licence Ouverte 2.0 »
+  - `api.py`: FastAPI, read-only `GET /v1/stations` (latest values incl. PM2.5, and
+    `source`) + `/health` for the portfolio site,
     DB role `site_reader` (select on view `station_latest` only, `sql/006`), CORS limited
     to the site's origins, `Vary: Origin`, 3 s connect / 2 s statement timeouts, 503
     when the database is unavailable; served by `sensor-pipeline api`
@@ -39,8 +55,10 @@ than feature count. Every change should be something a recruiter can read.
   - `sql/NNN_*.sql`: migrations applied in order by `sensor-pipeline migrate`
 - TimescaleDB (hypertable `telemetry`, continuous aggregate `telemetry_hourly`), Mosquitto
 - Data quality (`sql/003_data_quality.sql`, rules replaced by `sql/008`: temperature
-  5-40 °C for the mountain stations): procedure `flag_readings` scheduled with
-  `add_job` every 5 min, writes `reading_flags`; never modify `telemetry` to correct data,
+  5-40 °C for the mountain stations, then by `sql/010`: pm_spike judged only with 3
+  following readings, lookback 12 h, so hourly stations are judged once their next hours
+  arrive; pm_stuck / `pm10_stuck` count readings and are inert at hourly cadence):
+  procedure `flag_readings` scheduled with `add_job` every 5 min, writes `reading_flags`; never modify `telemetry` to correct data,
   add a rule instead. Dashboards read `telemetry_clean` for PM values.
 - `firmware/`: PlatformIO project for the ESP32 station. Logic in `lib/telemetry` (no
   Arduino dependency) tested with `pio test -e native`; `src/main.cpp` is hardware glue.
@@ -54,9 +72,9 @@ than feature count. Every change should be something a recruiter can read.
   ingestor uses DB role `sensor_ingestor` (insert-only) and must keep `on conflict do
   nothing` without a conflict target. `tests/test_security.py` attacks a real broker.
 - Docker Compose: provision, broker, db (host port 5433), migrate, ingest, simulator (profile
-  `simulated`) or bridge (profile `meteofrance`), api (host port 8010), Grafana (host port 3001,
+  `simulated`) or bridge (profiles `meteofrance` and `real`), api (host port 8010), Grafana (host port 3001,
   anonymous read-only)
-- Production: `docker-compose.vps.yml` for Coolify (no `ports:`, Coolify-generated
+- Production: `docker-compose.vps.yml` for Coolify (`STATION_SOURCE=real`, no `ports:`, Coolify-generated
   `SERVICE_PASSWORD_*`, memory limits, broker and Grafana config baked in by
   `docker/*.Dockerfile`), documented in `docs/deploy-vps.md`
 - `grafana/`: provisioned datasource (read-only role `grafana_reader`, password from

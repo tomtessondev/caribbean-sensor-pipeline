@@ -380,5 +380,5 @@ def test_bridge_refuses_a_broker_provisioned_for_other_stations(tmp_path: Path) 
     provision_broker(tmp_path, [s.station_id for s in seeded_stations("simulated")])
     settings = Settings(mqtt_credentials_file=tmp_path / "credentials.json")
 
-    with pytest.raises(ValueError, match="STATION_SOURCE=meteofrance"):
+    with pytest.raises(ValueError, match="STATION_SOURCE"):
         mqtt_sessions(settings, REGISTRY)

@@ -1,8 +1,10 @@
 # Deploying on a VPS with Coolify
 
-`docker-compose.vps.yml` runs the real Météo-France stations (no simulator) on a VPS
+`docker-compose.vps.yml` runs the real stations (no simulator) on a VPS
 managed by [Coolify](https://coolify.io), behind Coolify's Traefik proxy with Let's
-Encrypt certificates:
+Encrypt certificates. `STATION_SOURCE=real` (set in the file for `provision`, `migrate` and
+`bridge`) means the 80 Météo-France weather stations plus the 12 official PM10 / PM2.5
+stations of Gwad'Air and Madininair (LCSQA / INERIS real-time files, no key needed):
 
 | URL | Service |
 | --- | --- |
@@ -36,10 +38,12 @@ and no host port.
    alone: Coolify generates them on the first deploy and keeps them.
 6. **Deploy**. The first deploy builds three images (the application, the broker, Grafana),
    then starts the services in order: `provision` (certificates, broker logins) →
-   `broker` and `db` → `migrate` (schema, the 80 stations, the passwords of the three
+   `broker` and `db` → `migrate` (schema, the 92 stations, the passwords of the three
    restricted roles) → `ingest` → `bridge`, with `api` and `grafana` after `migrate`.
    The first readings arrive within a minute; every station has one within about
-   10 minutes.
+   10 minutes. The particle stations publish hourly means about 1.5 h after the hour:
+   on start the bridge publishes the hours of the current and the previous local day at
+   once, then each new hour.
 
 ### Variables
 
@@ -68,7 +72,7 @@ around 1 GB even if every service grows to its limit.
 | grafana | 192 MB | 117-157 MB |
 | broker | 64 MB | 7 MB |
 | ingest | 128 MB | 50 MB |
-| bridge | 128 MB | 67 MB |
+| bridge (peak about 92 MB while reading an air-quality file) | 128 MB | 76 MB |
 | api | 128 MB | 53 MB |
 | **long-running total** | **1024 MB** | **about 400 MB** |
 | provision, migrate (one-shot, exit in seconds) | 128 MB each | |
@@ -106,3 +110,41 @@ Merge to `main`, then **Redeploy** in Coolify (or turn on automatic deploys on p
 `provision` keeps the existing certificates and passwords, `migrate` applies only the
 new migrations, and the broker's persistent sessions keep the readings published while
 the ingestor restarts.
+
+### Moving an existing deployment to `STATION_SOURCE=real`
+
+A deployment made with `STATION_SOURCE=meteofrance` takes the change with a normal
+redeploy, nothing to do by hand:
+
+- `provision` runs on every deploy and keeps what exists: the CA and the 80 existing
+  logins stay, the 12 particle stations get theirs (`credentials.json`, `passwords`).
+- The broker reads its logins only when it starts (`docker/broker-entrypoint.sh` copies
+  and hashes `passwords`, then starts Mosquitto). A Coolify redeploy recreates every
+  container, the broker included, so it starts with the new logins. On a host where only
+  some containers are recreated (a plain `docker compose up -d`), recreate the broker
+  too: `docker compose up -d --force-recreate broker`; otherwise the bridge's particle
+  sessions are refused and logged as not acknowledged.
+- `migrate` applies `009_station_source.sql` (the `source` column, PM2.5 and `source` in
+  `station_latest`) and `010_hourly_quality.sql` (the spike rule waits for three later
+  readings, lookback 12 h), and registers the 12 new stations as active.
+- The bridge refuses to start if a station has no login, with a message naming the
+  `STATION_SOURCE` to provision with.
+
+After the redeploy, check the bridge for refused sessions (on the VPS, with the resource
+uuid shown in Coolify):
+
+```bash
+docker logs --since 30m "$(docker ps -qf name=^bridge-<resource uuid>)" 2>&1 | grep "not acknowledged"
+```
+
+No output is the expected result: every reading reached the broker. Lines naming
+`gp-aby-03`, `mq-fdf-06` or another particle station mean the broker still runs with
+the logins it had before the redeploy (its container was not recreated). Restart it,
+the one command to get approved before running it:
+
+```bash
+docker restart "$(docker ps -qf name=^broker-<resource uuid>)"
+```
+
+The broker re-reads `passwords` when it starts; the bridge's sessions reconnect on their
+own and send the readings they kept.

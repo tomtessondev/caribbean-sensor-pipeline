@@ -1,12 +1,22 @@
-"""Météo-France's automatic stations into MQTT, each one as if it were a device of ours.
+"""Real stations into MQTT, each one as if it were a device of ours: Météo-France's
+automatic weather stations and the official particle stations of Gwad'Air and Madininair.
 
-Every station measures every 6 minutes, but the readings reach the API in two ways: most
-within about 8 minutes, the others in one batch per hour, up to an hour late. The bridge
-therefore reads each 6-minute slot twice: 10 minutes after it (prompt stations) and 80
-minutes after it (the batches), and after a pause (laptop asleep, API down) catches up on
-every slot it missed, up to 3 hours back. Each reading not sent yet is published on the
-station's own MQTT session, logged in with the station's own credentials and last will,
-so the broker's ACL and everything downstream are the same as for a physical station.
+Météo-France: every station measures every 6 minutes, but the readings reach the API in
+two ways: most within about 8 minutes, the others in one batch per hour, up to an hour
+late. The bridge therefore reads each 6-minute slot twice: 10 minutes after it (prompt
+stations) and 80 minutes after it (the batches), and after a pause (laptop asleep, API
+down) catches up on every slot it missed, up to 3 hours back.
+
+Air quality: hourly means, published about 1.5 h after the hour (2.5 h at worst) in one
+file per local day that is rewritten every hour, the previous days' files too. A second
+poller looks at the files of the current and previous local day every 15 minutes, asking
+the server to send them only when they changed (If-Modified-Since, If-None-Match): an
+unchanged file costs a 304, not 12 MB. An hour is sent once, so the PM10-only hour of a
+station that reports PM2.5 waits up to 3 hours for its PM2.5, which can come later.
+
+Each reading not sent yet is published on the station's own MQTT session, logged in with
+the station's own credentials and last will, so the broker's ACL and everything
+downstream are the same as for a physical station.
 """
 
 from __future__ import annotations
@@ -15,28 +25,43 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
 import httpx
 import paho.mqtt.client as mqtt
 from pydantic import ValidationError
 
+from sensor_pipeline.airquality import (
+    LOCAL_TIME,
+    DayFile,
+    Version,
+    hourly_readings,
+    parse_day_file,
+)
 from sensor_pipeline.config import Settings
 from sensor_pipeline.messages import Telemetry, telemetry_topic
 from sensor_pipeline.meteofrance import SLOT_S, Observation, to_telemetry
 from sensor_pipeline.provision import load_credentials
 from sensor_pipeline.publisher import StationClient
-from sensor_pipeline.registry import RegistryStation
+from sensor_pipeline.registry import AirQualityStation, RegistryStation
 
 logger = logging.getLogger(__name__)
 
 # When each slot is read, after its time: once for the prompt stations, once for the
 # hourly batches.
 PASSES = (timedelta(minutes=10), timedelta(minutes=80))
-# Readings older than this are neither published nor remembered.
+# Météo-France readings older than this are neither published nor remembered.
 WINDOW = timedelta(hours=3)
 POLL_S = 120.0
+# The air-quality files are rewritten for three days while late values arrive: what was
+# sent is remembered that long, and nothing older is published.
+AIR_QUALITY_WINDOW = timedelta(hours=72)
+AIR_QUALITY_POLL_S = 900.0
+# The PM2.5 of an hour can reach the files after its PM10. A PM10-only hour of a station
+# that reports PM2.5 waits this long for it, then goes out alone: once sent, an hour is
+# never sent again, so its PM2.5 would be lost.
+PM25_WAIT = timedelta(hours=3)
 # Total wait for the broker's acknowledgements at the end of a tick, all sessions together.
 ACK_TIMEOUT_S = 30.0
 # What a tick may raise without stopping the bridge: the API unreachable or answering
@@ -48,13 +73,52 @@ class Api(Protocol):
     def package(self, at: datetime) -> list[Observation]: ...
 
 
+class DayFiles(Protocol):
+    def day_file(self, day: date, known: Version | None) -> DayFile | None: ...
+
+
+class Station(Protocol):
+    """What a session needs to know of a station, whatever its source."""
+
+    @property
+    def station_id(self) -> str: ...
+
+
 class Session(Protocol):
     def publish(self, reading: Telemetry) -> None: ...
     def wait_for_acks(self, deadline: float) -> None: ...
     def close(self) -> None: ...
 
 
-SessionFactory = Callable[[RegistryStation], Session]
+SessionFactory = Callable[[Station], Session]
+
+
+class _Sessions:
+    """The open MQTT sessions of one poller, one per station, opened on its first reading.
+    Acknowledgements are awaited once per tick, with one deadline for all sessions."""
+
+    def __init__(self, factory: SessionFactory) -> None:
+        self._factory = factory
+        self._open: dict[str, Session] = {}
+        self._touched: set[str] = set()
+
+    def publish(self, station: Station, reading: Telemetry) -> None:
+        session = self._open.get(station.station_id)
+        if session is None:
+            session = self._open[station.station_id] = self._factory(station)
+        session.publish(reading)
+        self._touched.add(station.station_id)
+
+    def wait_for_acks(self) -> None:
+        deadline = time.monotonic() + ACK_TIMEOUT_S
+        for station_id in sorted(self._touched):
+            self._open[station_id].wait_for_acks(deadline)
+        self._touched.clear()
+
+    def close(self) -> None:
+        for session in self._open.values():
+            session.close()
+        self._open.clear()
 
 
 def slot(t: datetime) -> datetime:
@@ -62,6 +126,8 @@ def slot(t: datetime) -> datetime:
 
 
 class Bridge:
+    """The Météo-France poller."""
+
     def __init__(
         self,
         api: Api,
@@ -71,13 +137,10 @@ class Bridge:
     ) -> None:
         self._api = api
         self._stations = {s.mf_id: s for s in registry}
-        self._open_session = sessions
+        self._sessions = _Sessions(sessions)
         self._clock = clock
-        self._sessions: dict[str, Session] = {}
         self._sent: dict[str, set[datetime]] = {}
         self._unknown: set[str] = set()
-        # Stations that published during the current tick, whose acks are awaited.
-        self._touched: set[str] = set()
         # The last slot each pass read.
         self.last_read: dict[int, datetime] = {}
 
@@ -88,7 +151,6 @@ class Bridge:
         from its last slot on the next tick; it does not stop the other pass."""
         now = self._clock()
         published = 0
-        self._touched.clear()
         try:
             for index, delay in enumerate(PASSES):
                 try:
@@ -99,7 +161,7 @@ class Bridge:
                 except TICK_ERRORS as exc:
                     logger.warning("Pass %d failed, resuming next tick: %r", index, exc)
         finally:
-            self._wait_for_acks()
+            self._sessions.wait_for_acks()
         self._forget(now)
         return published
 
@@ -118,15 +180,8 @@ class Bridge:
             at += step
         return due
 
-    def _wait_for_acks(self) -> None:
-        deadline = time.monotonic() + ACK_TIMEOUT_S
-        for station_id in sorted(self._touched):
-            self._sessions[station_id].wait_for_acks(deadline)
-
     def close(self) -> None:
-        for session in self._sessions.values():
-            session.close()
-        self._sessions.clear()
+        self._sessions.close()
 
     def _handle(self, obs: Observation, now: datetime) -> int:
         station = self._stations.get(obs.station)
@@ -145,17 +200,120 @@ class Bridge:
             return 0
         if reading is None:
             return 0
-        session = self._sessions.get(station.station_id)
-        if session is None:
-            session = self._sessions[station.station_id] = self._open_session(station)
-        session.publish(reading)
-        self._touched.add(station.station_id)
+        self._sessions.publish(station, reading)
         sent.add(obs.validity_time)
         return 1
 
     def _forget(self, now: datetime) -> None:
         for times in self._sent.values():
             times.difference_update({t for t in times if t < now - WINDOW})
+
+
+class AirQualityBridge:
+    """The air-quality poller: the files of the previous and the current local day."""
+
+    def __init__(
+        self,
+        files: DayFiles,
+        registry: Sequence[AirQualityStation],
+        sessions: SessionFactory,
+        clock: Callable[[], datetime],
+    ) -> None:
+        self._files = files
+        self._stations = {s.site_code: s for s in registry}
+        self._by_id = {s.station_id: s for s in registry}
+        self._sessions = _Sessions(sessions)
+        self._clock = clock
+        self._sent: dict[str, set[datetime]] = {}
+        self._unknown: set[str] = set()
+        # The version of each day file whose readings all went out (or wait in _held).
+        self._versions: dict[date, Version] = {}
+        # PM10-only hours waiting for their PM2.5, by station id and hour.
+        self._held: dict[tuple[str, datetime], Telemetry] = {}
+
+    def tick(self) -> int:
+        """Read the day files that changed and publish the readings not sent yet, then the
+        held PM10-only hours whose PM2.5 did not come in time. Returns readings published.
+        A day that fails is logged and read again in full on the next tick; it does not
+        stop the other day."""
+        now = self._clock()
+        today = now.astimezone(LOCAL_TIME).date()
+        days = (today - timedelta(days=1), today)
+        published = 0
+        try:
+            for day in days:
+                try:
+                    file = self._files.day_file(day, self._versions.get(day))
+                    if file is None:
+                        continue
+                    published += self._handle(file, now)
+                    self._versions[day] = file.version
+                except TICK_ERRORS as exc:
+                    # The storage may answer 403, not 404, for a file it does not hold
+                    # yet: for the current day, that is "not published yet".
+                    forbidden = (
+                        isinstance(exc, httpx.HTTPStatusError)
+                        and exc.response.status_code == httpx.codes.FORBIDDEN
+                    )
+                    if not (forbidden and day == today):
+                        logger.warning("Air-quality file of %s failed, retrying: %r", day, exc)
+            published += self._release(now)
+        finally:
+            self._sessions.wait_for_acks()
+        self._versions = {d: v for d, v in self._versions.items() if d in days}
+        for times in self._sent.values():
+            times.difference_update({t for t in times if t < now - AIR_QUALITY_WINDOW})
+        return published
+
+    def close(self) -> None:
+        self._sessions.close()
+
+    def _handle(self, file: DayFile, now: datetime) -> int:
+        means = parse_day_file(file.content)
+        for site_code in sorted({m.site_code for m in means} - set(self._stations)):
+            if site_code not in self._unknown:
+                self._unknown.add(site_code)
+                logger.warning("Air-quality site %s is not in the registry: skipped", site_code)
+        with_pm25 = {
+            self._stations[m.site_code].station_id
+            for m in means
+            if m.pollutant == "PM2.5" and m.site_code in self._stations
+        }
+        published = 0
+        for reading in sorted(
+            hourly_readings(means, self._stations), key=lambda r: (r.ts, r.station_id)
+        ):
+            sent = self._sent.setdefault(reading.station_id, set())
+            if reading.ts in sent or reading.ts < now - AIR_QUALITY_WINDOW:
+                continue
+            key = (reading.station_id, reading.ts)
+            if (
+                reading.pm2_5_ugm3 is None
+                and reading.station_id in with_pm25
+                and reading.ts >= now - PM25_WAIT
+            ):
+                self._held[key] = reading
+                continue
+            self._publish(reading)
+            self._held.pop(key, None)
+            published += 1
+        return published
+
+    def _release(self, now: datetime) -> int:
+        due = sorted((k for k in self._held if k[1] < now - PM25_WAIT), key=lambda k: (k[1], k[0]))
+        for key in due:
+            self._publish(self._held[key])
+            del self._held[key]
+        return len(due)
+
+    def _publish(self, reading: Telemetry) -> None:
+        self._sessions.publish(self._by_id[reading.station_id], reading)
+        self._sent.setdefault(reading.station_id, set()).add(reading.ts)
+
+
+class Poller(Protocol):
+    def tick(self) -> int: ...
+    def close(self) -> None: ...
 
 
 class Publisher(Protocol):
@@ -170,16 +328,14 @@ class MqttSession:
     acknowledgements are awaited together at the end of the tick. While the connection is
     down paho keeps the messages (MQTT_ERR_NO_CONN) and sends them on reconnection."""
 
-    def __init__(self, client: Publisher, station: RegistryStation) -> None:
+    def __init__(self, client: Publisher, station: Station) -> None:
         self._client = client
         self._station_id = station.station_id
         self._topic = telemetry_topic(station.station_id)
         self._pending: list[mqtt.MQTTMessageInfo] = []
 
     @classmethod
-    def open(
-        cls, station: RegistryStation, settings: Settings, password: str | None
-    ) -> MqttSession:
+    def open(cls, station: Station, settings: Settings, password: str | None) -> MqttSession:
         return cls(
             StationClient(station.station_id, settings, password, client_prefix="mf"), station
         )
@@ -208,7 +364,7 @@ class MqttSession:
         self._client.close()
 
 
-def mqtt_sessions(settings: Settings, registry: Sequence[RegistryStation] = ()) -> SessionFactory:
+def mqtt_sessions(settings: Settings, registry: Sequence[Station] = ()) -> SessionFactory:
     """Sessions logged in with each station's own password from credentials.json (none
     on a broker without authentication, as in the tests). Refuses to start when a station
     of `registry` has no password: the broker was provisioned for another source."""
@@ -221,16 +377,16 @@ def mqtt_sessions(settings: Settings, registry: Sequence[RegistryStation] = ()) 
     if settings.mqtt_credentials_file is not None and missing:
         raise ValueError(
             f"{len(missing)} stations have no broker login (e.g. {missing[0]}): "
-            "run provision-broker with STATION_SOURCE=meteofrance"
+            "run provision-broker with the bridge's STATION_SOURCE (meteofrance or real)"
         )
 
-    def open_session(station: RegistryStation) -> Session:
+    def open_session(station: Station) -> Session:
         return MqttSession.open(station, settings, credentials.get(station.station_id))
 
     return open_session
 
 
-def run(bridge: Bridge, stop: threading.Event, poll_s: float = POLL_S) -> None:
+def run(bridge: Poller, stop: threading.Event, poll_s: float = POLL_S) -> None:
     """Tick every `poll_s` seconds until `stop` is set. A failing API or broker is logged
     and retried on the next tick; it never stops the bridge."""
     try:
@@ -245,3 +401,33 @@ def run(bridge: Bridge, stop: threading.Event, poll_s: float = POLL_S) -> None:
                 break
     finally:
         bridge.close()
+
+
+def run_all(pollers: Sequence[tuple[Poller, float]], stop: threading.Event) -> None:
+    """Run each poller (with its poll interval) in its own thread until `stop` is set.
+    A poller that dies of an unexpected error (a bug, not a failing source, which `run`
+    absorbs) stops the others and is raised again as RuntimeError: the process exits and
+    its restart policy brings the whole bridge back, never half of it."""
+    crashed: list[BaseException] = []
+
+    def guarded(poller: Poller, poll_s: float) -> None:
+        try:
+            run(poller, stop, poll_s)
+        except Exception as exc:
+            logger.exception("Poller crashed, stopping the bridge")
+            crashed.append(exc)
+        finally:
+            stop.set()
+
+    threads = [
+        threading.Thread(target=guarded, args=(poller, poll_s), daemon=True)
+        for poller, poll_s in pollers
+    ]
+    for thread in threads:
+        thread.start()
+    # Short joins: the main thread must stay free to run the signal handlers.
+    for thread in threads:
+        while thread.is_alive():
+            thread.join(timeout=1)
+    if crashed:
+        raise RuntimeError("a poller crashed") from crashed[0]

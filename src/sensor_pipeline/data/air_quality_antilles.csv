@@ -1,0 +1,13 @@
+station_id,site_code,insee,name,territory,latitude,longitude,offline_after_s
+gp-abe-02,FR37041,97102,Anse-Bertrand Campêche,Guadeloupe,16.454500,-61.428100,14400
+gp-aby-03,FR37040,97101,Les Abymes RN1,Guadeloupe,16.254086,-61.537130,14400
+gp-bma-02,FR37001,97103,Baie-Mahault Belcourt,Guadeloupe,16.257307,-61.591724,14400
+gp-bte-02,FR37010,97105,Basse-Terre Pichon,Guadeloupe,15.994349,-61.727203,14400
+gp-pap-02,FR37006,97120,Pointe-à-Pitre Victoire,Guadeloupe,16.236740,-61.534100,14400
+mf-sma-03,FR37095,97127,Saint-Martin Concordia,Saint-Martin,18.066668,-63.076668,14400
+mq-fdf-06,FR39011,97209,Fort-de-France Renéville,Martinique,14.614111,-61.053080,14400
+mq-fdf-07,FR39015,97209,Fort-de-France Hôtel de ville,Martinique,14.607444,-61.069780,14400
+mq-lam-03,FR39009,97213,Le Lamentin,Martinique,14.610653,-61.002586,14400
+mq-rob-02,FR39016,97222,Le Robert Bourg,Martinique,14.678025,-60.939056,14400
+mq-sch-01,FR39008,97229,Schœlcher,Martinique,14.616389,-61.100792,14400
+mq-slu-02,FR39014,97227,Sainte-Luce,Martinique,14.468869,-60.927418,14400

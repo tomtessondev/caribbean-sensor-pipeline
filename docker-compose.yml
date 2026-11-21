@@ -1,7 +1,9 @@
 # The whole pipeline on a laptop: broker, database, migrations, ingestor, stations (six
-# simulated ones, or Météo-France's real ones through the bridge) and Grafana.
+# simulated ones, or the real ones through the bridge) and Grafana.
 # `make up` (or `docker compose --profile simulated up`) runs the simulator,
-# `make up STATION_SOURCE=meteofrance` the bridge.
+# `make up STATION_SOURCE=meteofrance` the bridge with Météo-France's weather stations,
+# `make up STATION_SOURCE=real` the bridge with those and the official air-quality stations
+# (the deployed stack).
 # Grafana on http://localhost:3001 (admin / admin), stations endpoint on
 # http://localhost:8010/v1/stations, database on localhost:5433, broker on localhost:8883
 # (TLS, login required; the CA is in the broker-secrets volume).
@@ -15,8 +17,9 @@ x-app: &app
     MQTT_TLS_CA: /broker/ca.crt
     MQTT_CREDENTIALS_FILE: /broker/credentials.json
     SENSOR_DB_DSN: postgresql://sensors:sensors@db:5432/sensors
-    # simulated (the six simulated stations) or meteofrance (the real stations of
-    # src/sensor_pipeline/data/meteofrance_antilles.csv): what migrate registers and what
+    # simulated (the six simulated stations), meteofrance (the weather stations of
+    # src/sensor_pipeline/data/meteofrance_antilles.csv) or real (those and the
+    # air-quality stations of data/air_quality_antilles.csv): what migrate registers and what
     # provision creates broker logins for.
     STATION_SOURCE: ${STATION_SOURCE:-simulated}
     GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana-local}
@@ -103,24 +106,30 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Real stations instead of the simulator: `make up STATION_SOURCE=meteofrance`. Needs
-  # the application id in secrets/meteofrance_application_id (never committed).
+  # Real stations instead of the simulator: `make up STATION_SOURCE=meteofrance` or
+  # `make up STATION_SOURCE=real`. Needs the Météo-France application id in
+  # secrets/meteofrance_application_id (never committed).
   bridge:
     <<: *app
     command: ["bridge"]
-    profiles: ["meteofrance"]
+    profiles: ["meteofrance", "real"]
     environment:
       MQTT_HOST: broker
       MQTT_PORT: "8883"
       MQTT_TLS_CA: /broker/ca.crt
       MQTT_CREDENTIALS_FILE: /broker/credentials.json
       METEOFRANCE_APPLICATION_ID_FILE: /run/secrets/meteofrance_application_id
+      STATION_SOURCE: ${STATION_SOURCE:-meteofrance}
     volumes:
       - broker-secrets:/broker:ro
       - ./secrets/meteofrance_application_id:/run/secrets/meteofrance_application_id:ro
     depends_on:
       ingest:
         condition: service_healthy
+    # Lets the tick in progress (a download of a few seconds, the wait for acks) end on
+    # `docker stop` instead of Docker's 10 s. A stuck one is killed: what was not
+    # acknowledged is sent again after the restart, and ingestion ignores duplicates.
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # The latest reading of each station for the portfolio site's map, on

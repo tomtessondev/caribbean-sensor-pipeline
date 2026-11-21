@@ -53,7 +53,9 @@ ALL_QUERIES = dashboard_queries() + alert_queries()
 def render(sql: str) -> str:
     """Expand the Grafana macros and variables the queries use, as Grafana would."""
     sql = re.sub(r"\$__timeFilter\(([^)]+)\)", r"\1 > now() - interval '6 hours'", sql)
-    sql = sql.replace("$__interval", "1 minute").replace("$station", "'gp-pap-01','mq-fdf-01'")
+    sql = sql.replace("$__interval", "1 minute")
+    for variable in ("$station", "$weather"):
+        sql = sql.replace(variable, "'gp-pap-01','mq-fdf-01'")
     assert "$" not in sql, f"unexpanded macro in {sql}"
     return sql
 

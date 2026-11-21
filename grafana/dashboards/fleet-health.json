@@ -219,7 +219,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "Flagged readings per hour",
-      "description": "pm_stuck: same PM10 value 30 times in a row. pm_spike: more than 3 times the surrounding readings. implausible_weather: impossible for a sea-level Caribbean town. Flagged readings are kept in the raw table and left out of the air-quality charts.",
+      "description": "pm_stuck: same PM10 value 30 times in a row. pm_spike: more than 3 times the surrounding readings, judged once 3 later readings arrived. pm_stuck counts readings, so it never fires on the hourly official stations. implausible_weather: impossible for a sea-level Caribbean town. Flagged readings are kept in the raw table and left out of the air-quality charts.",
       "gridPos": { "x": 8, "y": 28, "w": 16, "h": 9 },
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescale" },
       "targets": [
