@@ -12,7 +12,8 @@ PM part of the project (contract fields, quality rules, dashboards) runs on real
 
 - LCSQA / INERIS real-time E2 files on data.gouv.fr, no key, Licence Ouverte 2.0:
   `https://files.data.gouv.fr/ineris/lcsqa/concentrations-de-polluants-atmospheriques-reglementes/temps-reel/<YYYY>/FR_E2_<YYYY-MM-DD>.csv`
-  (302 to an OVH S3 object with `Last-Modified`; follow redirects).
+  (302 to an OVH S3 object with `Last-Modified` and `ETag`; follow redirects; the
+  conditional headers survive the redirect and the object answers 304).
 - One file per **local** day for all of France (≈ 12 MB, ≈ 47 000 rows), rewritten every
   hour around hh:30 UTC; the previous 2-3 days are rewritten too.
 - CSV: UTF-8 with BOM, `;`, quoted values, some empty unquoted fields (use the csv
@@ -62,7 +63,18 @@ Stations (coordinates from the same dataset's "Dataset D", WGS84):
   the site's stations map gets a toggle Température / PM10 and shows air-quality stations
   with their PM values and "données brutes non validées (LCSQA / INERIS, Gwad'Air,
   Madininair)".
-- The quality rules already handle PM (stuck, spikes); no change unless a test shows one.
+- ~~The quality rules already handle PM (stuck, spikes); no change unless a test shows
+  one.~~ Corrected after review: they were written for a reading every 10 seconds. An
+  hourly reading arrives before its following neighbours, so pm_spike compared a rising
+  value (15, 15, 15, then 50) with the past only and flagged it for good. `sql/010`
+  judges a spike only once 3 following readings exist and looks back 12 hours, so an
+  hourly reading is judged when its next hours arrive. pm_stuck and
+  `station_health.pm10_stuck` count readings (30 in a row, 10 in 30 minutes) and are
+  inert at one reading per hour; they are documented as such, not changed.
+- Added after review: a PM10-only hour of a station that reports PM2.5 is held up to
+  3 hours for its PM2.5 (an hour is sent once); the client sends `If-None-Match` as well
+  as `If-Modified-Since` (both verified to give a 304 through the redirect); a 403 on the
+  current day's file means "not published yet"; the download has a 60 s total timeout.
 
 ## Left to the builder
 
