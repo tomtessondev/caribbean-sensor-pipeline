@@ -235,6 +235,29 @@ def test_a_failing_day_does_not_stop_the_other_and_is_read_again(error: Exceptio
     assert files.requested == [(NOV_19, None), (NOV_20, Version(STAMP))]
 
 
+def status_error(code: int, day: date) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", f"https://storage.example/FR_E2_{day.isoformat()}.csv")
+    return httpx.HTTPStatusError(
+        str(code), request=request, response=httpx.Response(code, request=request)
+    )
+
+
+def test_forbidden_file_of_the_current_day_is_not_published_yet(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Just after local midnight the storage may answer 403 instead of 404 for a file it
+    does not hold yet: for the current day that is "not published yet", not a failure."""
+    files, sessions = FakeFiles(), Sessions()
+    files.fail[NOV_20] = status_error(403, NOV_20)
+    files.fail[NOV_19] = status_error(403, NOV_19)
+
+    with caplog.at_level(logging.WARNING, logger="sensor_pipeline.bridge"):
+        assert poller(files, sessions).tick() == 0
+
+    warnings = [r.getMessage() for r in caplog.records]
+    assert len(warnings) == 1 and "2026-11-19" in warnings[0]  # the previous day's 403
+
+
 def test_file_is_read_again_when_publishing_failed() -> None:
     """Its version is kept only once its readings went out: otherwise the next tick
     would get "not modified" and the readings would wait for the next rewrite."""

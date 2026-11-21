@@ -249,7 +249,14 @@ class AirQualityBridge:
                     published += self._handle(file, now)
                     self._versions[day] = file.version
                 except TICK_ERRORS as exc:
-                    logger.warning("Air-quality file of %s failed, retrying: %r", day, exc)
+                    # The storage may answer 403, not 404, for a file it does not hold
+                    # yet: for the current day, that is "not published yet".
+                    forbidden = (
+                        isinstance(exc, httpx.HTTPStatusError)
+                        and exc.response.status_code == httpx.codes.FORBIDDEN
+                    )
+                    if not (forbidden and day == today):
+                        logger.warning("Air-quality file of %s failed, retrying: %r", day, exc)
             published += self._release(now)
         finally:
             self._sessions.wait_for_acks()
