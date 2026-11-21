@@ -144,7 +144,9 @@ def hourly_readings(
 ) -> list[Telemetry]:
     """One reading per station and hour, PM10 and PM2.5 together, the other contract
     fields empty; `seq` counts hours since the epoch. Sites not in `stations` are left
-    out; a value outside the contract (a negative raw mean) drops that reading only."""
+    out. A value outside the contract's bounds (a negative raw mean, or above the
+    1000 µg/m³ the contract takes from the PMS5003 range) drops the whole reading of that
+    station and hour, its other pollutant too, with a warning; the other readings go on."""
     hours: dict[tuple[str, datetime], dict[Pollutant, float]] = defaultdict(dict)
     for mean in means:
         if mean.site_code in stations:

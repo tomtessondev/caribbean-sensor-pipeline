@@ -1,7 +1,7 @@
 {
   "uid": "air-quality",
   "title": "Air quality — Antilles",
-  "description": "Particulate matter from the official stations of Gwad'Air and Madininair (raw hourly means, not validated yet: LCSQA / INERIS real-time files) and weather from Météo-France, or both from the six simulated stations. PM10 is compared with the EU daily limit of 50 µg/m³; dust from the Sahara drives the peaks.",
+  "description": "Particulate matter from the official stations of Gwad'Air and Madininair (raw hourly means) and weather from Météo-France, or both from the six simulated stations. PM10 is compared with the EU daily limit of 50 µg/m³; dust from the Sahara drives the peaks. Particles: « Données temps réel non validées : LCSQA / INERIS (Géod'Air), produites par Gwad'Air et Madininair, data.gouv.fr, Licence Ouverte 2.0 ».",
   "tags": ["sensors", "air-quality"],
   "timezone": "America/Guadeloupe",
   "refresh": "30s",
