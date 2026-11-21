@@ -54,8 +54,10 @@ than feature count. Every change should be something a recruiter can read.
   - `sql/NNN_*.sql`: migrations applied in order by `sensor-pipeline migrate`
 - TimescaleDB (hypertable `telemetry`, continuous aggregate `telemetry_hourly`), Mosquitto
 - Data quality (`sql/003_data_quality.sql`, rules replaced by `sql/008`: temperature
-  5-40 °C for the mountain stations): procedure `flag_readings` scheduled with
-  `add_job` every 5 min, writes `reading_flags`; never modify `telemetry` to correct data,
+  5-40 °C for the mountain stations, then by `sql/010`: pm_spike judged only with 3
+  following readings, lookback 12 h, so hourly stations are judged once their next hours
+  arrive; pm_stuck / `pm10_stuck` count readings and are inert at hourly cadence):
+  procedure `flag_readings` scheduled with `add_job` every 5 min, writes `reading_flags`; never modify `telemetry` to correct data,
   add a rule instead. Dashboards read `telemetry_clean` for PM values.
 - `firmware/`: PlatformIO project for the ESP32 station. Logic in `lib/telemetry` (no
   Arduino dependency) tested with `pio test -e native`; `src/main.cpp` is hardware glue.

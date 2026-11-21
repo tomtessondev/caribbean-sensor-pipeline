@@ -151,14 +151,15 @@ Météo-France and the official particle stations) on a VPS with Coolify
 - **Flag, don't delete.** Three SQL rules run every 5 minutes as a TimescaleDB job:
   *pm_stuck* (the same PM10 value 30 times in a row), *pm_spike* (more than 3 times the
   mean of the 30 surrounding readings, so a Saharan plume rising over hours is not
-  flagged but an isolated glitch is) and *implausible_weather* (fine for the sensor,
+  flagged but an isolated glitch is; judged only once 3 following readings exist, so an
+  hourly station's latest value is not condemned before the next hours arrive) and *implausible_weather* (fine for the sensor,
   impossible for a Caribbean station: temperature outside 5-40 °C, which leaves room for
   the mountain stations' cold nights, humidity under 25 %, pressure outside 950-1040 hPa).
   Flags go to `reading_flags`; the raw table is never modified; `telemetry_clean` hides
   only the suspect values (a stuck PM sensor does not invalidate the temperature) and the
   air-quality charts read it.
-- **Checked by arrival, not by timestamp.** The rules look at everything received recently,
-  whatever its timestamp, so a station replaying an hour of buffered readings after an
+- **Checked by arrival, not by timestamp.** The rules look at everything received in the
+  last 12 hours, whatever its timestamp, so a station replaying an hour of buffered readings after an
   outage gets checked too.
 - **One quality number.** `station_quality_daily` gives, per station and local day, the
   share of expected readings (one per slot) that arrived and passed every rule: lost
@@ -238,7 +239,9 @@ the Météo-France one (`STATION_SOURCE=real`).
 - **A 72-hour memory.** Values arrive up to 2.5 hours late and files are rewritten for
   three days, so what was sent is remembered for 72 hours and nothing older is published.
 - **Raw values.** They are hourly means not validated yet by the networks (`moyenne
-  horaire brute`): the quality rules of this pipeline still apply to them.
+  horaire brute`): the quality rules of this pipeline still apply to them. A spike is
+  judged once three later hours arrived (`sql/010`); the stuck-sensor rules count
+  readings (30 in a row, 10 in 30 minutes) and stay inert at one reading per hour.
 - **Same ids, same contract.** The 12 stations are in
   `src/sensor_pipeline/data/air_quality_antilles.csv` with ids from the same commune table,
   continuing its counters (Les Abymes has `gp-aby-01` and `-02` from Météo-France, its
