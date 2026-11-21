@@ -40,8 +40,8 @@ than feature count. Every change should be something a recruiter can read.
     timestamps in the territory's local time, converted to UTC; A/1 rows only; PM10 and
     PM2.5 merged per station and hour, `seq` = hours since the epoch) and
     `bridge.AirQualityBridge` (current and previous local day every 15 min with
-    If-Modified-Since, 72 h "already sent" window). `bridge.run_all` runs both pollers
-    in threads; a crashed one stops the bridge. Tests replay
+    If-Modified-Since / If-None-Match, 304 when unchanged; 72 h "already sent" window).
+    `bridge.run_all` runs both pollers in threads; a crashed one stops the bridge. Tests replay
     `tests/fixtures/airquality/` (a trimmed real file); never call data.gouv.fr in tests.
     Attribution: « Données temps réel non validées : LCSQA / INERIS (Géod'Air), produites
     par Gwad'Air et Madininair, data.gouv.fr, Licence Ouverte 2.0 »

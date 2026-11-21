@@ -1,5 +1,5 @@
-"""The LCSQA / INERIS real-time files: parsing a trimmed real file and fetching with
-If-Modified-Since. HTTP is mocked: tests never call data.gouv.fr."""
+"""The LCSQA / INERIS real-time files: parsing a trimmed real file and fetching only
+what changed. HTTP is mocked: tests never call data.gouv.fr."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import respx
 from sensor_pipeline.airquality import (
     AirQualityClient,
     HourlyMean,
+    Version,
     file_url,
     hourly_readings,
     parse_day_file,
@@ -161,24 +162,42 @@ def test_real_file_gives_one_reading_per_station_and_hour() -> None:
 
 
 @respx.mock
-def test_client_sends_the_last_modified_date_back() -> None:
+def test_client_sends_the_validators_of_the_previous_read_back() -> None:
     url = file_url(date(2026, 11, 20))
-    stamp = "Sat, 21 Nov 2026 03:30:27 GMT"
+    stamp, etag = "Sat, 21 Nov 2026 03:30:27 GMT", '"9d02940a66d5524899316c38e6c998fe"'
     route = respx.get(url).mock(
         side_effect=[
-            httpx.Response(200, content=CONTENT, headers={"Last-Modified": stamp}),
+            httpx.Response(200, content=CONTENT, headers={"Last-Modified": stamp, "ETag": etag}),
             httpx.Response(304),
         ]
     )
     client = AirQualityClient(httpx.Client())
 
     first = client.day_file(date(2026, 11, 20), None)
-    second = client.day_file(date(2026, 11, 20), stamp)
+    assert first is not None and first.content == CONTENT
+    assert first.version == Version(stamp, etag)
+    second = client.day_file(date(2026, 11, 20), first.version)
 
-    assert first is not None and first.content == CONTENT and first.last_modified == stamp
     assert second is None
     assert "if-modified-since" not in route.calls[0].request.headers
+    assert "if-none-match" not in route.calls[0].request.headers
     assert route.calls[1].request.headers["if-modified-since"] == stamp
+    assert route.calls[1].request.headers["if-none-match"] == etag
+
+
+@respx.mock
+def test_unchanged_file_is_not_downloaded_through_the_redirect() -> None:
+    """data.gouv.fr answers 302 whatever the headers; the storage answers the conditional
+    request (checked by hand on 2026-11-21: 304, no body, for both validators)."""
+    storage = "https://storage.example/FR_E2_2026-11-20.csv"
+    respx.get(file_url(date(2026, 11, 20))).mock(
+        return_value=httpx.Response(302, headers={"Location": storage})
+    )
+    known = Version("Sat, 21 Nov 2026 03:30:27 GMT", '"abc"')
+    route = respx.get(storage).mock(return_value=httpx.Response(304))
+
+    assert AirQualityClient(httpx.Client()).day_file(date(2026, 11, 20), known) is None
+    assert route.calls[0].request.headers["if-none-match"] == '"abc"'
 
 
 @respx.mock
@@ -191,7 +210,7 @@ def test_client_follows_the_redirect_to_the_storage() -> None:
 
     day = AirQualityClient(httpx.Client()).day_file(date(2026, 11, 20), None)
 
-    assert day is not None and day.content == CONTENT and day.last_modified is None
+    assert day is not None and day.content == CONTENT and day.version == Version()
 
 
 @respx.mock

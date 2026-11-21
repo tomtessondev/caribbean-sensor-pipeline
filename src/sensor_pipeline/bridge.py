@@ -10,7 +10,8 @@ down) catches up on every slot it missed, up to 3 hours back.
 Air quality: hourly means, published about 1.5 h after the hour (2.5 h at worst) in one
 file per local day that is rewritten every hour, the previous days' files too. A second
 poller looks at the files of the current and previous local day every 15 minutes, asking
-the server to send them only when they changed (If-Modified-Since).
+the server to send them only when they changed (If-Modified-Since, If-None-Match): an
+unchanged file costs a 304, not 12 MB.
 
 Each reading not sent yet is published on the station's own MQTT session, logged in with
 the station's own credentials and last will, so the broker's ACL and everything
@@ -33,6 +34,7 @@ from pydantic import ValidationError
 from sensor_pipeline.airquality import (
     LOCAL_TIME,
     DayFile,
+    Version,
     hourly_readings,
     parse_day_file,
 )
@@ -67,7 +69,7 @@ class Api(Protocol):
 
 
 class DayFiles(Protocol):
-    def day_file(self, day: date, if_modified_since: str | None) -> DayFile | None: ...
+    def day_file(self, day: date, known: Version | None) -> DayFile | None: ...
 
 
 class Station(Protocol):
@@ -218,8 +220,8 @@ class AirQualityBridge:
         self._clock = clock
         self._sent: dict[str, set[datetime]] = {}
         self._unknown: set[str] = set()
-        # Last-Modified of each day file whose readings all went out.
-        self._modified: dict[date, str] = {}
+        # The version of each day file whose readings all went out.
+        self._versions: dict[date, Version] = {}
 
     def tick(self) -> int:
         """Read the day files that changed and publish the readings not sent yet. Returns
@@ -232,17 +234,16 @@ class AirQualityBridge:
         try:
             for day in days:
                 try:
-                    file = self._files.day_file(day, self._modified.get(day))
+                    file = self._files.day_file(day, self._versions.get(day))
                     if file is None:
                         continue
                     published += self._handle(file, now)
-                    if file.last_modified is not None:
-                        self._modified[day] = file.last_modified
+                    self._versions[day] = file.version
                 except TICK_ERRORS as exc:
                     logger.warning("Air-quality file of %s failed, retrying: %r", day, exc)
         finally:
             self._sessions.wait_for_acks()
-        self._modified = {d: m for d, m in self._modified.items() if d in days}
+        self._versions = {d: v for d, v in self._versions.items() if d in days}
         for times in self._sent.values():
             times.difference_update({t for t in times if t < now - AIR_QUALITY_WINDOW})
         return published

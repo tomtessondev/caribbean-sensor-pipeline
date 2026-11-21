@@ -33,7 +33,7 @@ embedded world I come from.
 | Message contract | JSON over MQTT, versioned, validated with pydantic | `src/sensor_pipeline/messages.py` |
 | Stations | Simulator: diurnal cycle, atmospheric tide, Saharan dust plumes, solar battery, faults | `src/sensor_pipeline/simulator.py`, `publisher.py` |
 | Real stations | Météo-France Package Observations API (OAuth2, httpx), a versioned registry of 80 stations, one MQTT session per station | `src/sensor_pipeline/meteofrance.py`, `bridge.py`, `registry.py`, `data/` |
-| Official air quality | LCSQA / INERIS real-time CSV files on data.gouv.fr (If-Modified-Since, local time to UTC), 12 particle stations | `src/sensor_pipeline/airquality.py`, `bridge.py`, `data/air_quality_antilles.csv` |
+| Official air quality | LCSQA / INERIS real-time CSV files on data.gouv.fr (conditional GET, local time to UTC), 12 particle stations | `src/sensor_pipeline/airquality.py`, `bridge.py`, `data/air_quality_antilles.csv` |
 | Stations endpoint | FastAPI, read-only: the latest clean reading of each station for the portfolio site's map; its own database role, CORS limited to the site | `src/sensor_pipeline/api.py`, `sql/006_site_reader.sql` |
 | Firmware | ESP32, C++17, PlatformIO: PMS5003 frame decoder, store-and-forward ring buffer, esp-mqtt QoS 1; Unity tests on the host; golden message shared with the Python tests | `firmware/` |
 | Broker | Eclipse Mosquitto 2: TLS only, a login per client, per-station ACL | `docker/mosquitto.conf`, `docker/broker-entrypoint.sh` |
@@ -219,9 +219,11 @@ the Météo-France one (`STATION_SOURCE=real`).
 
 - **One file per local day for all of France** (about 12 MB, 47 000 rows), rewritten every
   hour, and the files of the previous days rewritten too while late values arrive. The
-  poller reads the current and the previous local day every 15 minutes with
-  `If-Modified-Since`, so an unchanged file costs a 304; the date of a file is kept only
-  once its readings went out, so a broker outage does not lose them until the next
+  poller reads the current and the previous local day every 15 minutes, sending back the
+  `Last-Modified` and `ETag` of the last read (`If-Modified-Since`, `If-None-Match`):
+  data.gouv.fr redirects to an S3 storage that answers 304 with no body when the file is
+  unchanged, so a poll costs a few hundred bytes, not 12 MB. The version of a file is kept
+  only once its readings went out, so a broker outage does not lose them until the next
   rewrite. Only the Antilles rows are decoded: the whole file as text would not fit the
   bridge's memory limit.
 - **Local time, not UTC.** The timestamps are the territory's local time (UTC−4, no

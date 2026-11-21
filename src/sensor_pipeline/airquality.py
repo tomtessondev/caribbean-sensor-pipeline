@@ -71,9 +71,18 @@ class HourlyMean:
 
 
 @dataclass(frozen=True)
+class Version:
+    """What the storage said of a file it served: sent back on the next request, it answers
+    304 Not Modified, with no body, when the file has not been rewritten since."""
+
+    last_modified: str | None = None
+    etag: str | None = None
+
+
+@dataclass(frozen=True)
 class DayFile:
     content: bytes
-    last_modified: str | None
+    version: Version
 
 
 def parse_day_file(content: bytes) -> list[HourlyMean]:
@@ -158,13 +167,20 @@ class AirQualityClient:
     def __init__(self, http: httpx.Client) -> None:
         self._http = http
 
-    def day_file(self, day: date, if_modified_since: str | None) -> DayFile | None:
-        """The file of a local day, or None when it has not changed since
-        `if_modified_since` (the Last-Modified of the previous read) or is not published
-        yet. data.gouv.fr redirects to the storage that serves the file."""
-        headers = {"If-Modified-Since": if_modified_since} if if_modified_since else {}
+    def day_file(self, day: date, known: Version | None) -> DayFile | None:
+        """The file of a local day, or None when it is the `known` version (the one read
+        last) or is not published yet. data.gouv.fr redirects to the storage that serves
+        the file; the conditional headers go along and the storage answers them."""
+        headers = {}
+        if known is not None and known.last_modified is not None:
+            headers["If-Modified-Since"] = known.last_modified
+        if known is not None and known.etag is not None:
+            headers["If-None-Match"] = known.etag
         response = self._http.get(file_url(day), headers=headers, follow_redirects=True)
         if response.status_code in (httpx.codes.NOT_MODIFIED, httpx.codes.NOT_FOUND):
             return None
         response.raise_for_status()
-        return DayFile(response.content, response.headers.get("Last-Modified"))
+        return DayFile(
+            response.content,
+            Version(response.headers.get("Last-Modified"), response.headers.get("ETag")),
+        )

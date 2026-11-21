@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from sensor_pipeline.airquality import DayFile
+from sensor_pipeline.airquality import DayFile, Version
 from sensor_pipeline.bridge import AIR_QUALITY_WINDOW, AirQualityBridge, run, run_all
 from sensor_pipeline.registry import load_air_quality_registry
 from tests.test_bridge import Sessions
@@ -32,19 +32,19 @@ VICTOIRE = next(s for s in REGISTRY if s.site_code == "FR37006")
 
 class FakeFiles:
     """Serves `files[day]`, answering None (not modified) when the caller already has
-    that Last-Modified."""
+    that version."""
 
     def __init__(self) -> None:
         self.files: dict[date, DayFile] = {}
-        self.requested: list[tuple[date, str | None]] = []
+        self.requested: list[tuple[date, Version | None]] = []
         self.fail: dict[date, Exception] = {}
 
-    def day_file(self, day: date, if_modified_since: str | None) -> DayFile | None:
-        self.requested.append((day, if_modified_since))
+    def day_file(self, day: date, known: Version | None) -> DayFile | None:
+        self.requested.append((day, known))
         if day in self.fail:
             raise self.fail[day]
         file = self.files.get(day)
-        if file is None or (if_modified_since and file.last_modified == if_modified_since):
+        if file is None or file.version == known:
             return None
         return file
 
@@ -76,7 +76,7 @@ def test_reads_the_previous_and_the_current_local_day() -> None:
 
 def test_one_reading_per_station_and_hour_on_its_own_session() -> None:
     files, sessions = FakeFiles(), Sessions()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
 
     assert poller(files, sessions).tick() == 36
 
@@ -90,19 +90,19 @@ def test_one_reading_per_station_and_hour_on_its_own_session() -> None:
 
 def test_unchanged_file_is_not_downloaded_again() -> None:
     files, sessions = FakeFiles(), Sessions()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
     b = poller(files, sessions)
 
     b.tick()
     files.requested.clear()
 
     assert b.tick() == 0
-    assert files.requested == [(NOV_19, None), (NOV_20, STAMP)]
+    assert files.requested == [(NOV_19, None), (NOV_20, Version(STAMP))]
 
 
 def test_rewritten_file_publishes_only_the_new_hours() -> None:
     files, sessions = FakeFiles(), Sessions()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
     b = poller(files, sessions)
     b.tick()
     new_hour = (
@@ -110,7 +110,9 @@ def test_rewritten_file_publishes_only_the_new_hours() -> None:
         '"PTP-VICTOIRE";"Urbaine";"PM10";"Fond";"2";"Oui";"mesures fixes";"Auto";'
         '"moyenne horaire brute";"18";"18";"µg/m3";;;;"A";"1"\n'
     )
-    files.files[NOV_20] = DayFile(CONTENT + new_hour.encode(), "Sat, 21 Nov 2026 04:30:27 GMT")
+    files.files[NOV_20] = DayFile(
+        CONTENT + new_hour.encode(), Version("Sat, 21 Nov 2026 04:30:27 GMT")
+    )
 
     assert b.tick() == 1
     victoire = next(s for s in sessions.opened if s.station.station_id == VICTOIRE.station_id)
@@ -126,7 +128,7 @@ def test_readings_older_than_72_hours_are_dropped() -> None:
     # 20:30 local on the 23rd: of the fixture's hours, only 01:00 UTC on the 21st is
     # less than 72 hours old.
     clock = Clock(datetime(2026, 11, 24, 0, 30, tzinfo=UTC))
-    files.files[date(2026, 11, 22)] = DayFile(CONTENT, STAMP)
+    files.files[date(2026, 11, 22)] = DayFile(CONTENT, Version(STAMP))
 
     assert poller(files, sessions, clock).tick() == 12
     assert {ts for _, ts in sessions.sent()} == {HOURS[-1]}
@@ -134,24 +136,24 @@ def test_readings_older_than_72_hours_are_dropped() -> None:
 
 def test_sent_hours_are_remembered_for_the_whole_window() -> None:
     files, sessions, clock = FakeFiles(), Sessions(), Clock()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
     b = poller(files, sessions, clock)
     b.tick()
     # Two days later the 20th is still rewritten, with a new date: nothing is resent.
     clock.now += timedelta(days=2)
-    files.files[date(2026, 11, 21)] = DayFile(CONTENT, "Mon, 23 Nov 2026 01:30:00 GMT")
+    files.files[date(2026, 11, 21)] = DayFile(CONTENT, Version("Mon, 23 Nov 2026 01:30:00 GMT"))
 
     assert b.tick() == 0
 
 
 def test_unknown_station_is_skipped_and_logged_once(caplog: pytest.LogCaptureFixture) -> None:
     files, sessions = FakeFiles(), Sessions()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
     b = poller(files, sessions, registry=[s for s in REGISTRY if s is not VICTOIRE])
 
     with caplog.at_level(logging.WARNING, logger="sensor_pipeline.bridge"):
         assert b.tick() == 33
-        files.files[NOV_20] = DayFile(CONTENT, "Sat, 21 Nov 2026 04:30:27 GMT")
+        files.files[NOV_20] = DayFile(CONTENT, Version("Sat, 21 Nov 2026 04:30:27 GMT"))
         b.tick()
 
     assert VICTOIRE.station_id not in {station for station, _ in sessions.sent()}
@@ -164,7 +166,7 @@ def test_unknown_station_is_skipped_and_logged_once(caplog: pytest.LogCaptureFix
 )
 def test_a_failing_day_does_not_stop_the_other_and_is_read_again(error: Exception) -> None:
     files, sessions = FakeFiles(), Sessions()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
     files.fail[NOV_19] = error
     b = poller(files, sessions)
 
@@ -173,14 +175,14 @@ def test_a_failing_day_does_not_stop_the_other_and_is_read_again(error: Exceptio
     files.requested.clear()
     b.tick()
 
-    assert files.requested == [(NOV_19, None), (NOV_20, STAMP)]
+    assert files.requested == [(NOV_19, None), (NOV_20, Version(STAMP))]
 
 
 def test_file_is_read_again_when_publishing_failed() -> None:
-    """Its Last-Modified is kept only once its readings went out: otherwise the next
-    tick would get "not modified" and the readings would wait for the next rewrite."""
+    """Its version is kept only once its readings went out: otherwise the next tick
+    would get "not modified" and the readings would wait for the next rewrite."""
     files = FakeFiles()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
     failing = True
 
     class BrokenSessions(Sessions):
@@ -199,7 +201,7 @@ def test_file_is_read_again_when_publishing_failed() -> None:
 
 def test_acks_are_awaited_once_per_tick_with_one_deadline() -> None:
     files, sessions = FakeFiles(), Sessions()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
 
     poller(files, sessions).tick()
 
@@ -210,7 +212,7 @@ def test_acks_are_awaited_once_per_tick_with_one_deadline() -> None:
 
 def test_run_survives_errors_and_closes_sessions() -> None:
     files, sessions = FakeFiles(), Sessions()
-    files.files[NOV_20] = DayFile(CONTENT, STAMP)
+    files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
     b = poller(files, sessions)
     b.tick()
     files.fail[NOV_19] = httpx.ConnectError("unreachable")
