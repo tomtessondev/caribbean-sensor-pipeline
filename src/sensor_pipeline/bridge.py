@@ -11,7 +11,8 @@ Air quality: hourly means, published about 1.5 h after the hour (2.5 h at worst)
 file per local day that is rewritten every hour, the previous days' files too. A second
 poller looks at the files of the current and previous local day every 15 minutes, asking
 the server to send them only when they changed (If-Modified-Since, If-None-Match): an
-unchanged file costs a 304, not 12 MB.
+unchanged file costs a 304, not 12 MB. An hour is sent once, so the PM10-only hour of a
+station that reports PM2.5 waits up to 3 hours for its PM2.5, which can come later.
 
 Each reading not sent yet is published on the station's own MQTT session, logged in with
 the station's own credentials and last will, so the broker's ACL and everything
@@ -57,6 +58,10 @@ POLL_S = 120.0
 # sent is remembered that long, and nothing older is published.
 AIR_QUALITY_WINDOW = timedelta(hours=72)
 AIR_QUALITY_POLL_S = 900.0
+# The PM2.5 of an hour can reach the files after its PM10. A PM10-only hour of a station
+# that reports PM2.5 waits this long for it, then goes out alone: once sent, an hour is
+# never sent again, so its PM2.5 would be lost.
+PM25_WAIT = timedelta(hours=3)
 # Total wait for the broker's acknowledgements at the end of a tick, all sessions together.
 ACK_TIMEOUT_S = 30.0
 # What a tick may raise without stopping the bridge: the API unreachable or answering
@@ -216,17 +221,21 @@ class AirQualityBridge:
     ) -> None:
         self._files = files
         self._stations = {s.site_code: s for s in registry}
+        self._by_id = {s.station_id: s for s in registry}
         self._sessions = _Sessions(sessions)
         self._clock = clock
         self._sent: dict[str, set[datetime]] = {}
         self._unknown: set[str] = set()
-        # The version of each day file whose readings all went out.
+        # The version of each day file whose readings all went out (or wait in _held).
         self._versions: dict[date, Version] = {}
+        # PM10-only hours waiting for their PM2.5, by station id and hour.
+        self._held: dict[tuple[str, datetime], Telemetry] = {}
 
     def tick(self) -> int:
-        """Read the day files that changed and publish the readings not sent yet. Returns
-        readings published. A day that fails is logged and read again in full on the next
-        tick; it does not stop the other day."""
+        """Read the day files that changed and publish the readings not sent yet, then the
+        held PM10-only hours whose PM2.5 did not come in time. Returns readings published.
+        A day that fails is logged and read again in full on the next tick; it does not
+        stop the other day."""
         now = self._clock()
         today = now.astimezone(LOCAL_TIME).date()
         days = (today - timedelta(days=1), today)
@@ -241,6 +250,7 @@ class AirQualityBridge:
                     self._versions[day] = file.version
                 except TICK_ERRORS as exc:
                     logger.warning("Air-quality file of %s failed, retrying: %r", day, exc)
+            published += self._release(now)
         finally:
             self._sessions.wait_for_acks()
         self._versions = {d: v for d, v in self._versions.items() if d in days}
@@ -257,7 +267,11 @@ class AirQualityBridge:
             if site_code not in self._unknown:
                 self._unknown.add(site_code)
                 logger.warning("Air-quality site %s is not in the registry: skipped", site_code)
-        by_id = {s.station_id: s for s in self._stations.values()}
+        with_pm25 = {
+            self._stations[m.site_code].station_id
+            for m in means
+            if m.pollutant == "PM2.5" and m.site_code in self._stations
+        }
         published = 0
         for reading in sorted(
             hourly_readings(means, self._stations), key=lambda r: (r.ts, r.station_id)
@@ -265,10 +279,29 @@ class AirQualityBridge:
             sent = self._sent.setdefault(reading.station_id, set())
             if reading.ts in sent or reading.ts < now - AIR_QUALITY_WINDOW:
                 continue
-            self._sessions.publish(by_id[reading.station_id], reading)
-            sent.add(reading.ts)
+            key = (reading.station_id, reading.ts)
+            if (
+                reading.pm2_5_ugm3 is None
+                and reading.station_id in with_pm25
+                and reading.ts >= now - PM25_WAIT
+            ):
+                self._held[key] = reading
+                continue
+            self._publish(reading)
+            self._held.pop(key, None)
             published += 1
         return published
+
+    def _release(self, now: datetime) -> int:
+        due = sorted((k for k in self._held if k[1] < now - PM25_WAIT), key=lambda k: (k[1], k[0]))
+        for key in due:
+            self._publish(self._held[key])
+            del self._held[key]
+        return len(due)
+
+    def _publish(self, reading: Telemetry) -> None:
+        self._sessions.publish(self._by_id[reading.station_id], reading)
+        self._sent.setdefault(reading.station_id, set()).add(reading.ts)
 
 
 class Poller(Protocol):

@@ -14,6 +14,7 @@ import pytest
 from sensor_pipeline.airquality import DayFile, Version
 from sensor_pipeline.bridge import AIR_QUALITY_WINDOW, AirQualityBridge, run, run_all
 from sensor_pipeline.registry import load_air_quality_registry
+from tests.test_airquality import csv_file, row
 from tests.test_bridge import Sessions
 
 REGISTRY = load_air_quality_registry()
@@ -105,19 +106,75 @@ def test_rewritten_file_publishes_only_the_new_hours() -> None:
     files.files[NOV_20] = DayFile(CONTENT, Version(STAMP))
     b = poller(files, sessions)
     b.tick()
-    new_hour = (
-        '"2026/11/20 22:00:00";"2026/11/20 23:00:00";"GWAD\'AIR";"FR01ZAG01";"ZAG";"FR37006";'
-        '"PTP-VICTOIRE";"Urbaine";"PM10";"Fond";"2";"Oui";"mesures fixes";"Auto";'
-        '"moyenne horaire brute";"18";"18";"µg/m3";;;;"A";"1"\n'
-    )
+    # Belcourt measures PM10 only: its new hour is not held for a PM2.5.
+    new_hour = row(start="2026/11/20 22:00:00", site="FR37001", value="18") + "\n"
     files.files[NOV_20] = DayFile(
         CONTENT + new_hour.encode(), Version("Sat, 21 Nov 2026 04:30:27 GMT")
     )
 
     assert b.tick() == 1
-    victoire = next(s for s in sessions.opened if s.station.station_id == VICTOIRE.station_id)
-    assert victoire.sent[-1].ts == datetime(2026, 11, 21, 2, tzinfo=UTC)
+    belcourt = next(s for s in REGISTRY if s.site_code == "FR37001")
+    session = next(s for s in sessions.opened if s.station.station_id == belcourt.station_id)
+    assert session.sent[-1].ts == datetime(2026, 11, 21, 2, tzinfo=UTC)
     assert len(sessions.sent()) == 37
+
+
+def victoire_and_belcourt(*, pm25_at_21: bool) -> bytes:
+    """Victoire (PM10 and PM2.5) and Belcourt (PM10 only) at 19:00 and 21:00 local; the
+    PM2.5 of Victoire at 21:00 only when `pm25_at_21`."""
+    rows = [
+        row(start=f"2026/11/20 {hour}:00:00", site=site, pollutant=pollutant, value=value)
+        for hour in ("19", "21")
+        for site, pollutant, value in (
+            ("FR37006", "PM10", "14"),
+            ("FR37006", "PM2.5", "7"),
+            ("FR37001", "PM10", "12"),
+        )
+        if pm25_at_21 or (hour, site, pollutant) != ("21", "FR37006", "PM2.5")
+    ]
+    return csv_file(*rows)
+
+
+def readings_of(sessions: Sessions, station_id: str) -> list[tuple[datetime, float | None]]:
+    return [
+        (r.ts, r.pm2_5_ugm3)
+        for s in sessions.opened
+        if s.station.station_id == station_id
+        for r in s.sent
+    ]
+
+
+def test_pm10_waits_for_the_pm25_of_its_hour() -> None:
+    """The PM2.5 of an hour can reach the file after its PM10: a station that reports
+    PM2.5 is not sent a PM10-only hour while that hour is less than 3 hours old, or the
+    PM2.5 would be lost (the hour counts as sent). A PM10-only station is sent at once."""
+    files, sessions = FakeFiles(), Sessions()
+    files.files[NOV_20] = DayFile(victoire_and_belcourt(pm25_at_21=False), Version(STAMP))
+    b = poller(files, sessions)
+    belcourt = next(s.station_id for s in REGISTRY if s.site_code == "FR37001")
+
+    assert b.tick() == 3
+    assert readings_of(sessions, VICTOIRE.station_id) == [(HOURS[0], 7.0)]
+    assert [ts for ts, _ in readings_of(sessions, belcourt)] == [HOURS[0], HOURS[2]]
+
+    later = "Sat, 21 Nov 2026 04:30:27 GMT"
+    files.files[NOV_20] = DayFile(victoire_and_belcourt(pm25_at_21=True), Version(later))
+    assert b.tick() == 1
+    assert readings_of(sessions, VICTOIRE.station_id) == [(HOURS[0], 7.0), (HOURS[2], 7.0)]
+
+
+def test_pm10_is_sent_alone_once_its_pm25_is_3_hours_late() -> None:
+    files, sessions, clock = FakeFiles(), Sessions(), Clock()
+    files.files[NOV_20] = DayFile(victoire_and_belcourt(pm25_at_21=False), Version(STAMP))
+    b = poller(files, sessions, clock)
+    b.tick()
+
+    clock.now = HOURS[2] + timedelta(hours=3)
+    assert b.tick() == 0  # still within the wait: the hour is exactly 3 hours old
+    clock.now += timedelta(minutes=15)  # the file did not change: sent from memory
+
+    assert b.tick() == 1
+    assert readings_of(sessions, VICTOIRE.station_id) == [(HOURS[0], 7.0), (HOURS[2], None)]
 
 
 def test_readings_older_than_72_hours_are_dropped() -> None:

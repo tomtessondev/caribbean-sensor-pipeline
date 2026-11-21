@@ -232,7 +232,9 @@ the Météo-France one (`STATION_SOURCE=real`).
   Gwad'Air's own service in true UTC. 21:00 in Pointe-à-Pitre becomes 01:00 UTC the next
   day.
 - **One reading per station and hour.** PM10 and PM2.5 of the same hour are merged into
-  one message (the other contract fields stay empty), `ts` is the start of the hour and
+  one message (the other contract fields stay empty); an hour is sent once, so when a
+  station that measures PM2.5 has only its PM10 in the file yet, that hour waits up to
+  3 hours for the PM2.5, then goes out alone; `ts` is the start of the hour and
   `seq` the number of hours since the epoch. Only rows marked valid (`code qualité` A,
   `validité` 1) with a value are kept; the unit is spelled `µg-m3` or `µg/m3`, anything
   else is logged and skipped.

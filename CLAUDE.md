@@ -38,7 +38,8 @@ than feature count. Every change should be something a recruiter can read.
     tests
   - `airquality.py` (LCSQA / INERIS real-time day files on data.gouv.fr, no key:
     timestamps in the territory's local time, converted to UTC; A/1 rows only; PM10 and
-    PM2.5 merged per station and hour, `seq` = hours since the epoch) and
+    PM2.5 merged per station and hour, `seq` = hours since the epoch; a PM10-only hour of
+    a station that reports PM2.5 is held up to 3 h for it) and
     `bridge.AirQualityBridge` (current and previous local day every 15 min with
     If-Modified-Since / If-None-Match, 304 when unchanged; 72 h "already sent" window).
     `bridge.run_all` runs both pollers in threads; a crashed one stops the bridge. Tests replay
