@@ -15,16 +15,29 @@ import httpx
 import typer
 import uvicorn
 
+from sensor_pipeline.airquality import AirQualityClient
 from sensor_pipeline.api import create_app
-from sensor_pipeline.bridge import POLL_S, Bridge, mqtt_sessions
-from sensor_pipeline.bridge import run as run_bridge
+from sensor_pipeline.bridge import (
+    AIR_QUALITY_POLL_S,
+    POLL_S,
+    AirQualityBridge,
+    Bridge,
+    Poller,
+    mqtt_sessions,
+    run_all,
+)
 from sensor_pipeline.config import Settings
 from sensor_pipeline.db import Store, migrate
 from sensor_pipeline.ingest import ingest as run_ingest
 from sensor_pipeline.meteofrance import MeteoFranceClient
 from sensor_pipeline.provision import BROKER_HOSTNAMES, provision_broker
 from sensor_pipeline.publisher import simulate as run_simulation
-from sensor_pipeline.registry import StationSource, load_registry, seeded_stations
+from sensor_pipeline.registry import (
+    StationSource,
+    load_air_quality_registry,
+    load_registry,
+    seeded_stations,
+)
 from sensor_pipeline.stations import STATIONS
 
 app = typer.Typer(help="Antilles sensor pipeline", no_args_is_help=True)
@@ -111,15 +124,28 @@ def simulate(
 
 @app.command()
 def bridge(
-    poll: float = typer.Option(POLL_S, min=10, help="Seconds between two looks at the API"),
+    poll: float = typer.Option(
+        POLL_S, min=10, help="Seconds between two looks at the Météo-France API"
+    ),
     application_id_file: Path = typer.Option(
         Path("secrets/meteofrance_application_id"),
         envvar="METEOFRANCE_APPLICATION_ID_FILE",
         help="File holding the Météo-France application id (or set METEOFRANCE_APPLICATION_ID)",
     ),
+    source: StationSource = typer.Option(
+        "meteofrance",
+        envvar="STATION_SOURCE",
+        help="meteofrance (the weather stations) or real (plus the air-quality stations, "
+        "polled every 15 minutes)",
+    ),
 ) -> None:
-    """Publish the readings of Météo-France's automatic stations until stopped, each
-    station on its own MQTT session (provision the broker with STATION_SOURCE=meteofrance)."""
+    """Publish the readings of the real stations until stopped, each station on its own
+    MQTT session (provision the broker with the same STATION_SOURCE)."""
+    if source == "simulated":
+        raise typer.BadParameter(
+            "the bridge publishes real stations: STATION_SOURCE must be meteofrance or real",
+            param_hint="STATION_SOURCE",
+        )
     application_id = os.getenv("METEOFRANCE_APPLICATION_ID")
     if not application_id:
         # Docker mounts a missing file as an empty directory: say what is missing
@@ -132,19 +158,32 @@ def bridge(
             )
         application_id = application_id_file.read_text(encoding="utf-8").strip()
     settings = Settings()
-    registry = load_registry()
-    sessions = mqtt_sessions(settings, registry)
+    weather = load_registry()
+    particles = load_air_quality_registry() if source == "real" else []
+    sessions = mqtt_sessions(settings, [*weather, *particles])
+    stop = _stop_on_signals()
     with httpx.Client(timeout=60) as http:
-        run_bridge(
-            Bridge(
-                MeteoFranceClient(http, application_id, time.monotonic),
-                registry,
-                sessions,
-                lambda: datetime.now(UTC),
-            ),
-            _stop_on_signals(),
-            poll,
-        )
+        pollers: list[tuple[Poller, float]] = [
+            (
+                Bridge(
+                    MeteoFranceClient(http, application_id, time.monotonic),
+                    weather,
+                    sessions,
+                    lambda: datetime.now(UTC),
+                ),
+                poll,
+            )
+        ]
+        if particles:
+            pollers.append(
+                (
+                    AirQualityBridge(
+                        AirQualityClient(http), particles, sessions, lambda: datetime.now(UTC)
+                    ),
+                    AIR_QUALITY_POLL_S,
+                )
+            )
+        run_all(pollers, stop)
 
 
 @app.command()
