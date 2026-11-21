@@ -126,6 +126,10 @@ services:
     depends_on:
       ingest:
         condition: service_healthy
+    # Lets the tick in progress (a download of a few seconds, the wait for acks) end on
+    # `docker stop` instead of Docker's 10 s. A stuck one is killed: what was not
+    # acknowledged is sent again after the restart, and ingestion ignores duplicates.
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # The latest reading of each station for the portfolio site's map, on

@@ -4,6 +4,8 @@ what changed. HTTP is mocked: tests never call data.gouv.fr."""
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -240,3 +242,27 @@ def test_value_outside_the_contract_drops_that_reading_only(
 
     assert [r.station_id for r in readings] == [STATIONS["FR37001"].station_id]
     assert STATIONS["FR37006"].station_id in caplog.text
+
+
+class SlowBody(httpx.SyncByteStream):
+    """A body trickling in: each chunk on time, the whole far too slow."""
+
+    def __iter__(self) -> Iterator[bytes]:
+        for _ in range(20):
+            time.sleep(0.02)
+            yield b"x" * 100
+
+
+@respx.mock
+def test_download_has_a_total_timeout() -> None:
+    """httpx's timeouts bound each read, not the whole download: a body that keeps
+    trickling must not hold the poller (and the bridge's shutdown) for ever."""
+    respx.get(file_url(date(2026, 11, 20))).mock(
+        return_value=httpx.Response(200, stream=SlowBody())
+    )
+    client = AirQualityClient(httpx.Client(), total_timeout_s=0.1)
+
+    started = time.monotonic()
+    with pytest.raises(httpx.TimeoutException):
+        client.day_file(date(2026, 11, 20), None)
+    assert time.monotonic() - started < 0.3

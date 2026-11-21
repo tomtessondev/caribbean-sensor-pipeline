@@ -14,6 +14,7 @@ import csv
 import io
 import itertools
 import logging
+import time
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -56,6 +57,9 @@ COLUMNS = (
     "validité",
 )
 HOUR_S = 3600
+# The whole download, redirect included: httpx's own timeout bounds each read only, so a
+# body that keeps trickling would hold the poller for ever. 12 MB takes a few seconds.
+DOWNLOAD_TIMEOUT_S = 60.0
 
 
 def file_url(day: date) -> str:
@@ -164,8 +168,9 @@ def hourly_readings(
 
 
 class AirQualityClient:
-    def __init__(self, http: httpx.Client) -> None:
+    def __init__(self, http: httpx.Client, total_timeout_s: float = DOWNLOAD_TIMEOUT_S) -> None:
         self._http = http
+        self._total_timeout_s = total_timeout_s
 
     def day_file(self, day: date, known: Version | None) -> DayFile | None:
         """The file of a local day, or None when it is the `known` version (the one read
@@ -176,11 +181,22 @@ class AirQualityClient:
             headers["If-Modified-Since"] = known.last_modified
         if known is not None and known.etag is not None:
             headers["If-None-Match"] = known.etag
-        response = self._http.get(file_url(day), headers=headers, follow_redirects=True)
-        if response.status_code in (httpx.codes.NOT_MODIFIED, httpx.codes.NOT_FOUND):
-            return None
-        response.raise_for_status()
+        deadline = time.monotonic() + self._total_timeout_s
+        with self._http.stream(
+            "GET", file_url(day), headers=headers, follow_redirects=True
+        ) as response:
+            if response.status_code in (httpx.codes.NOT_MODIFIED, httpx.codes.NOT_FOUND):
+                return None
+            response.raise_for_status()
+            content = bytearray()
+            for chunk in response.iter_bytes():
+                if time.monotonic() > deadline:
+                    raise httpx.ReadTimeout(
+                        f"download longer than {self._total_timeout_s} s",
+                        request=response.request,
+                    )
+                content += chunk
         return DayFile(
-            response.content,
+            bytes(content),
             Version(response.headers.get("Last-Modified"), response.headers.get("ETag")),
         )
